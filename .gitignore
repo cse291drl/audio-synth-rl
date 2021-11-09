@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Preset files
 DX7_AllTheWeb
 
@@ -6,6 +7,14 @@ DX7_AllTheWeb
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
 
 ### Python ###
+=======
+# Project specific
+synth/*.wav
+data/*
+!data/README.md
+
+
+>>>>>>> dda4ea7ecceeb6d4162016185f4b6d9ad43cdb96
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -144,6 +153,7 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+<<<<<<< HEAD
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
@@ -257,3 +267,17 @@ fabric.properties
 .idea/codestream.xml
 
 # End of https://www.toptal.com/developers/gitignore/api/pycharm
+=======
+© 2021 GitHub, Inc.
+Terms
+Privacy
+Security
+Status
+Docs
+Contact GitHub
+Pricing
+API
+Training
+Blog
+About
+>>>>>>> dda4ea7ecceeb6d4162016185f4b6d9ad43cdb96
