@@ -173,9 +173,80 @@ class PPO:
 		self.cov_var = torch.full(size=(self.num_continuous,), fill_value=0.5)
 		self.cov_mat = torch.diag(self.cov_var)
 
-	def rollout(self, init_states):
-		""" Do rollouts and return whats returned in other imp """
+	@staticmethod
+	def unbatch_states(states):
+		"""Unbatch a dict of batched tensors into a list of dicts of tensors.
+		"""
+		ret_states = []
+
+		n_states = len(states['target_spectrogram'])
+		for i in range(n_states):
+			ret_states.append({
+				k: v[i] for k, v in states.items()
+			})
+
+		return ret_states
+
+	def step(self, states, actions):
+		"""	Performs actions in parallel for batch
+		
+		TODO: implement
+		"""
 		pass
+
+	def get_actions(self, states):
+		"""Get actions for a batch of states.
+
+		TODO: which params are continuous vs descrete groups
+		"""
+		action_logits = self.actor(states)
+
+		return actions
+
+	def compute_rtgs(self, batch_rewards):
+		"""Compute rewards-to-go
+		
+		TODO: implement
+		"""
+		pass
+
+	def rollout(self, init_states, n_steps):
+		""" Do rollouts and return whats returned in other imp """
+		# Data on rolledout batch which will be returned
+		batch_obs = []
+		batch_acts = []
+		batch_log_probs = []
+		batch_rews = []
+		batch_rtgs = []
+		batch_lens = []
+
+		# track these somehow
+		ep_rewards = []
+
+		obs = init_states
+
+		# Step through episode from each initial state in parallel
+		for i in range(n_steps):
+			# Add current state info
+			batch_obs.extend(PPO.unbatch_states(obs))
+
+			# Get action from actor and take step
+			actions, _log_probs = self.get_actions(obs)
+			obs, rews = self.step(obs, actions)
+
+			# Update rewards, actions, and action log probs
+			# TODO: update these based on type returned above
+			ep_rewards #update this and batch_rews, or maybe we only need one
+			batch_acts #extend
+			batch_log_probs #extend
+
+			batch_lens #update 
+
+		# Data should already be tensors, so just compute rtgs
+		batch_rtgs = self.compute_rtgs(batch_rews)
+
+		return batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens
+
 
 
 if __name__ == '__main__':
@@ -185,6 +256,7 @@ if __name__ == '__main__':
 	steps_per_episode = 25
 	rollout_batch_size = 32
 	num_train_iter = 100
+	n_updates_per_iteration = 5	 # Number of times to update actor/critic per iteration
 
 	# Load the target sounds
 	dataset = TargetSoundDataset(
@@ -219,7 +291,7 @@ if __name__ == '__main__':
 		comparer_net=CNNComparer(n_feat_channels=32*2)
 	)
 	critic = PolicyModel(
-		sound_comparer=actor_comp_net,
+		sound_comparer=critic_comp_net,
 		decision_head=BasicActorHead(416 + n_params + 1, 1)
 	)
 
@@ -268,9 +340,45 @@ if __name__ == '__main__':
 		}
 
 		# Do rollouts
-		# We might just want to pass init_steps_remaining somehow so it 
-		# doesn't have to get it from the states, since it should always
-		# start with the same number and decrease together
 		(batch_obs, batch_acts, batch_log_probs, batch_rtgs, 
-			batch_lens) = ppo_model.rollout(rollout_init_states)
-		break
+			batch_lens) = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
+		
+		# Compute advantages and normalize
+		V, _ = ppo_model.evaluate(batch_obs, batch_acts)
+		A_k = batch_rtgs - V.detach()
+		A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
+
+		# Update actor and critic
+		for j in range(n_updates_per_iteration):
+			# Calculate V_phi and pi_theta(a_t | s_t)
+			V, curr_log_probs = ppo_model.evaluate(batch_obs, batch_acts)
+
+			# Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
+			# NOTE: we just subtract the logs, which is the same as
+			# dividing the values and then canceling the log with e^log.
+			# For why we use log probabilities instead of actual probabilities,
+			# here's a great explanation: 
+			# https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
+			# TL;DR makes gradient ascent easier behind the scenes.
+			ratios = torch.exp(curr_log_probs - batch_log_probs)
+
+			# Calculate surrogate losses.
+			surr1 = ratios * A_k
+			surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * A_k
+
+			# Calculate actor and critic losses.
+			# NOTE: we take the negative min of the surrogate losses because we're trying to maximize
+			# the performance function, but Adam minimizes the loss. So minimizing the negative
+			# performance function maximizes it.
+			actor_loss = (-torch.min(surr1, surr2)).mean()
+			critic_loss = nn.MSELoss()(V, batch_rtgs)
+
+			# Calculate gradients and perform backward propagation for actor network
+			self.actor_optim.zero_grad()
+			actor_loss.backward(retain_graph=True)
+			self.actor_optim.step()
+
+			# Calculate gradients and perform backward propagation for critic network
+			self.critic_optim.zero_grad()
+			critic_loss.backward()
+			self.critic_optim.step()
