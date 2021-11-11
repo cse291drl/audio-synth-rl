@@ -268,6 +268,9 @@ if __name__ == '__main__':
 		}
 
 		# Do rollouts
-		batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens = self.rollout(
-			rollout_init_states)
+		# We might just want to pass init_steps_remaining somehow so it 
+		# doesn't have to get it from the states, since it should always
+		# start with the same number and decrease together
+		(batch_obs, batch_acts, batch_log_probs, batch_rtgs, 
+			batch_lens) = ppo_model.rollout(rollout_init_states)
 		break
