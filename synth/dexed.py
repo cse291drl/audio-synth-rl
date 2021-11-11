@@ -396,7 +396,7 @@ class Dexed:
         """
         Dexed.set_all_oscillators_off_(preset_params)
         for op_number in operators_to_turn_on:
-            self.set_param(44 + 22 * (op_number-1), 1.0)
+            preset_params[44 + 22 * (op_number-1)] = 1.0
 
     def prevent_SH_LFO(self):
         """ If the LFO Wave is random S&H, transforms it into a square 

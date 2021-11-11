@@ -11,8 +11,10 @@ if __name__ == "__main__":
     __spec__ = None
 
     # Set parameters
-    save_dir = os.path.join('..', 'data', 'preset_data')
-
+    save_dir = os.path.join(os.path.realpath('..'), 'data', 'preset_data')
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
     # Load needed data and synth
     dexed_db = PresetDatabase()
     dexed_synth = Dexed(plugin_path='Dexed.dll')
