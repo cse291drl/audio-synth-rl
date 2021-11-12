@@ -4,10 +4,11 @@ import torch
 import torch.nn as nn
 from torch.nn.modules import dropout
 from torch.utils.data import DataLoader
+from torch.distributions import MultivariateNormal
 from tqdm import tqdm
 
 from data_modules.data_modules import TargetSoundDataset
-
+from synth.dexed import Dexed
 
 class CNNFeatExtractor(nn.Module):
 	"""CNN for extracting feats from sound spectrograms or stacked 
@@ -78,6 +79,38 @@ class CNNComparer(nn.Module):
 		x = self.dropout3(x)
 		return x
 
+class PresetActivation(nn.Module):
+    """ Applies the appropriate activations (e.g. sigmoid, hardtanh, softmax, ...) to different neurons
+    or groups of neurons of a given input layer. """
+    def __init__(self, 
+                 numerical_activation=nn.Hardtanh(min_val=0.0, max_val=1.0),
+                 cat_softmax_activation=False):
+        """
+        :param idx_helper:
+        :param numerical_activation: Should be nn.Hardtanh if numerical params often reach 0.0 and 1.0 GT values,
+            or nn.Sigmoid to perform a smooth regression without extreme 0.0 and 1.0 values.
+        :param cat_softmax_activation: if True, a softmax activation is applied on categorical sub-vectors.
+            Otherwise, applies the same HardTanh for cat and num params (and softmax should be applied in loss function)
+        """
+        super().__init__()
+        self.numerical_act = numerical_activation
+        self.cat_softmax_activation = cat_softmax_activation
+        if self.cat_softmax_activation:
+            self.categorical_act = nn.Softmax(dim=-1)  # Required for categorical cross-entropy loss
+            # Pre-compute indexes lists (to use less CPU)
+            self.num_indexes, self.cat_indexes = Dexed.get_learnable_indexes()
+        else:
+            pass  # Nothing to init....
+
+    def forward(self, x):
+        """ Applies per-parameter output activations using the PresetIndexesHelper attribute of this instance. """
+        if self.cat_softmax_activation:
+            x[:, self.num_indexes] = self.numerical_act(x[:, self.num_indexes])
+            for cat_learnable_indexes in self.cat_indexes:  # type: Iterable
+                x[:, cat_learnable_indexes] = self.categorical_act(x[:, cat_learnable_indexes])
+        else:  # Same activation on num and cat ('one-hot encoded') params
+            x = self.numerical_act(x)
+        return x
 
 class BasicActorHead(nn.Module):
 	def __init__(self, input_size, output_size, hidden_sizes=[256,64],
@@ -90,11 +123,12 @@ class BasicActorHead(nn.Module):
 		self.act2 = nn.ReLU()
 		self.dropout2 = nn.Dropout(dropout)
 		self.fc3 = nn.Linear(hidden_sizes[1], output_size)
+		self.activation = PresetActivation()
 
 	def forward(self, x):
 		x = self.dropout1(self.act1(self.fc1(x)))
 		x = self.dropout2(self.act2(self.fc2(x)))
-		return self.fc3(x)
+		return self.activation(self.fc3(x))
 
 
 class BasicCriticHead(nn.Module):
@@ -201,7 +235,11 @@ class PPO:
 		"""
 		action_logits = self.actor(states)
 
-		return actions
+		dist = MultivariateNormal(action_logits, self.cov_mat)
+		action = dist.sample()
+		log_prob = dist.log_prob(action)
+  
+		return action.detach().numpy(), log_prob.detach()
 
 	def compute_rtgs(self, batch_rewards):
 		"""Compute rewards-to-go
