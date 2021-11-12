@@ -1,10 +1,12 @@
 import os
 
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.modules import dropout
 from torch.utils.data import DataLoader
-from torch.distributions import MultivariateNormal
+from torch.distributions import MultivariateNormal, Categorical
 from tqdm import tqdm
 
 from data_modules.data_modules import AudioHandler, TargetSoundDataset
@@ -81,37 +83,37 @@ class CNNComparer(nn.Module):
 		return x
 
 class PresetActivation(nn.Module):
-    """ Applies the appropriate activations (e.g. sigmoid, hardtanh, softmax, ...) to different neurons
-    or groups of neurons of a given input layer. """
-    def __init__(self, 
-                 numerical_activation=nn.Hardtanh(min_val=0.0, max_val=1.0),
-                 cat_softmax_activation=False):
-        """
-        :param idx_helper:
-        :param numerical_activation: Should be nn.Hardtanh if numerical params often reach 0.0 and 1.0 GT values,
-            or nn.Sigmoid to perform a smooth regression without extreme 0.0 and 1.0 values.
-        :param cat_softmax_activation: if True, a softmax activation is applied on categorical sub-vectors.
-            Otherwise, applies the same HardTanh for cat and num params (and softmax should be applied in loss function)
-        """
-        super().__init__()
-        self.numerical_act = numerical_activation
-        self.cat_softmax_activation = cat_softmax_activation
-        if self.cat_softmax_activation:
-            self.categorical_act = nn.Softmax(dim=-1)  # Required for categorical cross-entropy loss
-            # Pre-compute indexes lists (to use less CPU)
-            self.num_indexes, self.cat_indexes = Dexed.get_learnable_indexes()
-        else:
-            pass  # Nothing to init....
+	""" Applies the appropriate activations (e.g. sigmoid, hardtanh, softmax, ...) to different neurons
+	or groups of neurons of a given input layer. """
+	def __init__(self, 
+				 numerical_activation=nn.Hardtanh(min_val=0.0, max_val=1.0),
+				 cat_softmax_activation=False):
+		"""
+		:param idx_helper:
+		:param numerical_activation: Should be nn.Hardtanh if numerical params often reach 0.0 and 1.0 GT values,
+			or nn.Sigmoid to perform a smooth regression without extreme 0.0 and 1.0 values.
+		:param cat_softmax_activation: if True, a softmax activation is applied on categorical sub-vectors.
+			Otherwise, applies the same HardTanh for cat and num params (and softmax should be applied in loss function)
+		"""
+		super().__init__()
+		self.numerical_act = numerical_activation
+		self.cat_softmax_activation = cat_softmax_activation
+		if self.cat_softmax_activation:
+			self.categorical_act = nn.Softmax(dim=-1)  # Required for categorical cross-entropy loss
+			# Pre-compute indexes lists (to use less CPU)
+			self.num_indexes, self.cat_indexes = Dexed.get_learnable_indexes()
+		else:
+			pass  # Nothing to init....
 
-    def forward(self, x):
-        """ Applies per-parameter output activations using the PresetIndexesHelper attribute of this instance. """
-        if self.cat_softmax_activation:
-            x[:, self.num_indexes] = self.numerical_act(x[:, self.num_indexes])
-            for cat_learnable_indexes in self.cat_indexes:  # type: Iterable
-                x[:, cat_learnable_indexes] = self.categorical_act(x[:, cat_learnable_indexes])
-        else:  # Same activation on num and cat ('one-hot encoded') params
-            x = self.numerical_act(x)
-        return x
+	def forward(self, x):
+		""" Applies per-parameter output activations using the PresetIndexesHelper attribute of this instance. """
+		if self.cat_softmax_activation:
+			x[:, self.num_indexes] = self.numerical_act(x[:, self.num_indexes])
+			for cat_learnable_indexes in self.cat_indexes:  # type: Iterable
+				x[:, cat_learnable_indexes] = self.categorical_act(x[:, cat_learnable_indexes])
+		else:  # Same activation on num and cat ('one-hot encoded') params
+			x = self.numerical_act(x)
+		return x
 
 class BasicActorHead(nn.Module):
 	def __init__(self, input_size, output_size, hidden_sizes=[256,64],
@@ -186,15 +188,29 @@ def n_trainable_params(model):
 
 
 class PPO:
-	def __init__(self, actor, critic, num_continuous, actor_lr=1e-3, critic_lr=1e-3, gamma=0.9):
+	def __init__(self, actor, critic, actor_lr=1e-3, critic_lr=1e-3, gamma=0.9,
+			cov_matrix_val=.01):
 		super().__init__()
 		self.actor = actor
 		self.critic = critic
 		self.actor_lr = actor_lr
 		self.critic_lr = critic_lr
 		self.gamma = gamma
+		self.cov_matrix_val = cov_matrix_val
 		self.audiohandler = AudioHandler()
-		self.num_continuous = num_continuous
+		self.continuous_activation = nn.Hardtanh(min_val=0.0, max_val=1.0)
+
+		# Mapping stuff
+		self.continuous_params_dict = {
+			k:v for element in AudioHandler.get_mapping_dict()['Numerical'] for k,v in element.items()
+		}
+		self.cont_logit_indices = np.array(list(self.continuous_params_dict.values()))
+		self.cont_param_indices = np.array(list(self.continuous_params_dict.keys()))
+		self.num_continuous = len(self.cont_logit_indices)
+
+		self.desc_params_dict = {
+			k:v for element in AudioHandler.get_mapping_dict()['Categorical'] for k,v in element.items()
+		}
 
 		# Initialize optimizers for actor and critic
 		self.actor_optim = torch.optim.Adam(
@@ -206,7 +222,10 @@ class PPO:
 
 		# Initialize the covariance matrix used to query the actor for 
 		# continuous actions
-		self.cov_var = torch.full(size=(self.num_continuous,), fill_value=0.5)
+		self.cov_var = torch.full(
+			size=(self.num_continuous,), 
+			fill_value=self.cov_matrix_val
+		)
 		self.cov_mat = torch.diag(self.cov_var)
 
 	@staticmethod
@@ -245,17 +264,41 @@ class PPO:
 	
  
 	def get_actions(self, states):
-		"""Get actions for a batch of states.
-
-		TODO: which params are continuous vs descrete groups
-		"""
+		""" Get actions for a batch of states. """
 		action_logits = self.actor(states)
 
-		dist = MultivariateNormal(action_logits, self.cov_mat)
-		action = dist.sample()
-		log_prob = dist.log_prob(action)
+		if action_logits.dim() > 1:
+			cov_mat = torch.stack(
+				[ppo_model.cov_mat for _ in range(action_logits.shape[0])], 
+				dim=0
+			)
+		else:
+			cov_mat = self.cov_mat
+		output_actions = torch.zeros_like(action_logits)
+
+		# Sample actions from multivariate normal distribution for 
+		# continuous params
+		cont_logits = action_logits[:, self.cont_logit_indices]
+		dist = MultivariateNormal(cont_logits, cov_mat)
+		cont_actions = self.continuous_activation(dist.sample())
+		cont_log_probs = dist.log_prob(cont_actions)
+
+		output_actions[:, self.cont_param_indices] = cont_actions
+
+		total_log_probs = cont_log_probs
+
+		# Sample actions from categorical distributions for discrete params
+		for dexed_idx, log_idx in self.desc_params_dict.items():
+			logits = action_logits[:, log_idx]
+			dist = Categorical(logits=logits)
+
+			action_inds = dist.sample()
+			total_log_probs += dist.log_prob(action_inds)
+
+			one_hot_actions = F.one_hot(action_inds, num_classes=len(log_idx))
+			output_actions[:, log_idx] = one_hot_actions.float()
   
-		return action.detach().numpy(), log_prob.detach()
+		return output_actions.detach(), total_log_probs.detach()
 
 	def compute_rtgs(self, batch_rewards):
 		"""Compute rewards-to-go
@@ -314,7 +357,6 @@ class PPO:
 		return batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens
 
 
-
 if __name__ == '__main__':
 	__spec__ = None
 
@@ -339,9 +381,12 @@ if __name__ == '__main__':
 		shuffle=True
 	)
 
-	# these parameters about the data should become constants once they're set
+	# Parameters about the data
+	mapping_dict = AudioHandler.get_mapping_dict()
+	n_params = len(mapping_dict['Numerical']) + sum(
+		[len(*p.values()) for p in mapping_dict['Categorical']])
+
 	spectrogram_shape = (257, 345)
-	n_params = 144
 
 	# define actor and critic models
 	actor_comp_net = ComparerNetwork(

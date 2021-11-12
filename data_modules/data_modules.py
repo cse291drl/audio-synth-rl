@@ -118,7 +118,7 @@ class AudioHandler:
 		_, spec = self.generateAudio(params, return_spec = True)
 		return spec
 	
-	def getMAE(self, target_spectrogram,pred_spectrogram):
+	def getMAE(self, target_spectrogram, pred_spectrogram):
 		'''
 		Calculates MAE based on STFT
 		'''
@@ -138,6 +138,26 @@ class AudioHandler:
 		pred_stft = self.spectrogram.mel_dB_to_STFT(pred_spectrogram)
 		sc = np.linalg.norm(target_stft - pred_stft, ord='fro') / np.linalg.norm(target_stft, ord='fro')
 		return sc
+
+	@staticmethod
+	def get_mapping_dict():
+		numerical_set = set(Dexed.get_numerical_params_indexes_learnable())
+		categorical_set = set(Dexed.get_categorical_params_indexes_learnable())
+		preset_length = 155
+		mapping_dict = {'Numerical':[],'Categorical':[]}
+		learn_idx = 0
+		for vst_idx in range(preset_length):
+			if vst_idx in categorical_set:
+				n_classes = Dexed.get_param_cardinality(vst_idx)
+				cat_list = []
+				for idx in range(n_classes):
+					cat_list.append(learn_idx)
+					learn_idx += 1
+				mapping_dict['Categorical'].append({vst_idx:cat_list})
+			elif vst_idx in numerical_set:
+				mapping_dict['Numerical'].append({vst_idx:learn_idx})
+				learn_idx += 1
+		return mapping_dict  
 
 class TargetSoundDataModule(pl.LightningDataModule):
 	def __init__(self, data_dir, split_file, batch_size = 32, num_workers = 1,
