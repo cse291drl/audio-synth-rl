@@ -110,13 +110,34 @@ class AudioHandler:
 		if return_spec:
 			return audio, self.spectrogram(audio)
 		return audio
+
+	def generateSpectrogram(self, params, return_spec = True ):
+		'''
+		Generates audio given a particular set of parameters, and returns the associated spectrogram with the audio.
+		'''
+		_, spec = self.generateAudio(params, return_spec = True)
+		return spec
 	
-	def getMAE(self, x_wav):
+	def getMAE(self, target_spectrogram,pred_spectrogram):
 		'''
-		Wraps audio.py's audio similarity evaluator
+		Calculates MAE based on STFT
 		'''
-		eval = audio.SimilarityEvaluator(x_wav)
-		return eval.get_mae_log_stft(return_spectrograms=False)
+		target_stft = self.spectrogram.mel_dB_to_STFT(target_spectrogram)
+		pred_stft = self.spectrogram.mel_dB_to_STFT(pred_spectrogram)
+		eps = 1e-4  # -80dB  (un-normalized stfts)
+		log_target_stft = np.log10(np.maximum(target_stft,eps))
+		log_pred_stft = np.log10(np.maximum(pred_stft,eps))
+		mae = np.abs(log_target_stft-log_pred_stft).mean()
+		return mae
+
+	def getSpectralConvergence(self, target_spectrogram,pred_spectrogram):
+		'''
+  		Calculates spectral convergence
+    	'''
+		target_stft = self.spectrogram.mel_dB_to_STFT(target_spectrogram)
+		pred_stft = self.spectrogram.mel_dB_to_STFT(pred_spectrogram)
+		sc = np.linalg.norm(target_stft - pred_stft, ord='fro') / np.linalg.norm(target_stft, ord='fro')
+		return sc
 
 class TargetSoundDataModule(pl.LightningDataModule):
 	def __init__(self, data_dir, split_file, batch_size = 32, num_workers = 1,

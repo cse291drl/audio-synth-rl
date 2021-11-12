@@ -7,7 +7,8 @@ from torch.utils.data import DataLoader
 from torch.distributions import MultivariateNormal
 from tqdm import tqdm
 
-from data_modules.data_modules import TargetSoundDataset
+from data_modules.data_modules import AudioHandler, TargetSoundDataset
+from loss import presetParam
 from synth.dexed import Dexed
 
 class CNNFeatExtractor(nn.Module):
@@ -192,7 +193,7 @@ class PPO:
 		self.actor_lr = actor_lr
 		self.critic_lr = critic_lr
 		self.gamma = gamma
-
+		self.audiohandler = AudioHandler()
 		self.num_continuous = num_continuous
 
 		# Initialize optimizers for actor and critic
@@ -224,11 +225,25 @@ class PPO:
 
 	def step(self, states, actions):
 		"""	Performs actions in parallel for batch
-		
 		TODO: implement
 		"""
-		pass
+		pred_states = []
+		rewards = []
+		assert len(states) == len(actions) # states should equal actions
+		for i in range(len(states)):
+			# Convert learnable param to synthesizer param
+			param = presetParam(actions[i],learnable=True)
+			# Get next state
+			pred_states.append(self.audiohandler.generateSpectrogram(param.to_params()))
 
+			# Generate reward
+			mae = self.audiohandler.getMAE(states[i],pred_states[i])
+			sc = self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
+			rewards.append({'mae':mae,'sc':sc})
+
+		return pred_states, rewards
+	
+ 
 	def get_actions(self, states):
 		"""Get actions for a batch of states.
 

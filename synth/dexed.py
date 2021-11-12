@@ -537,24 +537,25 @@ class Dexed:
             indexes.append(40 + 22*i)  # R scale
         return indexes
     
-    @staticmethod
-    def get_learnable_indexes():
-        n_params = 155 # HARDCODED, but will suffice for now
-        cat_list = set(Dexed.get_numerical_params_indexes_learnable())
-        num_list = set(Dexed.get_categorical_params_indexes_learnable())
-        cat_learnable = []
-        num_learnable = []
-        learn_idx = 0
-        for vst_idx in range(n_params):
-            if vst_idx in cat_list:
-                cat_learnable.append(learn_idx)
-                learn_idx += 1
-            elif vst_idx in num_list:
-                num_learnable.append(learn_idx)
-                learn_idx += 1
-            else:
-                continue
-        return num_learnable, cat_learnable
+    # DEPRECATED
+    # @staticmethod
+    # def get_learnable_indexes():
+    #     n_params = 155 # HARDCODED, but will suffice for now
+    #     cat_list = set(Dexed.get_numerical_params_indexes_learnable())
+    #     num_list = set(Dexed.get_categorical_params_indexes_learnable())
+    #     cat_learnable = []
+    #     num_learnable = []
+    #     learn_idx = 0
+    #     for vst_idx in range(n_params):
+    #         if vst_idx in cat_list:
+    #             cat_learnable.append(learn_idx)
+    #             learn_idx += 1
+    #         elif vst_idx in num_list:
+    #             num_learnable.append(learn_idx)
+    #             learn_idx += 1
+    #         else:
+    #             continue
+    #     return num_learnable, cat_learnable
         
     # @staticmethod    
     # def get_useless_learned_params_indexes(self, preset_GT: torch.Tensor):
