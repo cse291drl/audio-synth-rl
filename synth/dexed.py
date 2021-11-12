@@ -499,20 +499,49 @@ class Dexed:
         return indexes
 
     @staticmethod
+    def get_numerical_params_indexes_learnable():
+        indexes = [0, 1, 2, 3, 5,  # cutoff, reso, output, master tune, feedback (card:8)
+                   7, 8, 9, 10,  # lfo speed, lfo delay (before LFO actually modulates), lfo pm depth, lfo am depth
+                   13, 14, 15, 16, 17, 18, 19, 20, 21, 22]  # transpose, pitch mod sensitivity, pitch EG rates/levels
+        for i in range(6):  # operators
+            for j in [23, 24, 25, 26, 27, 28, 29, 30]:  # rates and levels
+                indexes.append(j + 22*i)
+            indexes.append(31 + 22*i)  # output level
+            indexes.append(33 + 22*i)  # freq coarse
+            indexes.append(34 + 22*i)  # freq fine
+            indexes.append(35 + 22*i)  # detune (these 3 parameters kind of overlap...)
+            indexes.append(36 + 22*i)  # L/R scales breakpoint
+            indexes.append(37 + 22*i)  # L scale depth
+            indexes.append(38 + 22*i)  # R scale depth
+            indexes.append(41 + 22*i)  # rate scaling (card:8)
+            indexes.append(42 + 22*i)  # amplitude mod sensitivity (card:4)
+            indexes.append(43 + 22*i)  # key velocity (card:8)
+        return indexes
+    
+    @staticmethod
     def get_categorical_params_indexes():
         indexes = [4, 6, 11, 12]  # algorithm, osc key sync, lfo key sync, lfo wave
         for i in range(6):  # operators
             indexes.append(32 + 22*i)  # mode (ratio or fixed frequency)
             indexes.append(39 + 22*i)  # L scale
             indexes.append(40 + 22*i)  # R scale
-            indexes.append(44 + 22*i)  # op on/off switch
+            indexes.append(44 + 22*i)  # op on/off switch 
+        return indexes
+    
+    @staticmethod
+    def get_categorical_params_indexes_learnable():
+        indexes = [4, 6, 11, 12]  # algorithm, osc key sync, lfo key sync, lfo wave
+        for i in range(6):  # operators
+            indexes.append(32 + 22*i)  # mode (ratio or fixed frequency)
+            indexes.append(39 + 22*i)  # L scale
+            indexes.append(40 + 22*i)  # R scale
         return indexes
     
     @staticmethod
     def get_learnable_indexes():
         n_params = 155 # HARDCODED, but will suffice for now
-        cat_list = set(Dexed.get_numerical_params_indexes())
-        num_list = set(Dexed.get_categorical_params_indexes())
+        cat_list = set(Dexed.get_numerical_params_indexes_learnable())
+        num_list = set(Dexed.get_categorical_params_indexes_learnable())
         cat_learnable = []
         num_learnable = []
         learn_idx = 0

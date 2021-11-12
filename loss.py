@@ -149,8 +149,8 @@ class presetParam():
         self._batch_size = preset_params.shape[0]
         # print(preset_params.shape)
         self.device = device
-        self.numerical_set = set(Dexed.get_numerical_params_indexes())
-        self.categorical_set = set(Dexed.get_categorical_params_indexes())
+        self.numerical_set = set(Dexed.get_numerical_params_indexes_learnable())
+        self.categorical_set = set(Dexed.get_categorical_params_indexes_learnable())
         self.learnable_num, self.learnable_cat, self.learnable_preset_size = generateLearnableIndices(self.preset_length,\
                                                                           self.numerical_set,self.categorical_set)
         self.learnable = learnable
@@ -214,7 +214,17 @@ class presetParam():
                     learn_indexes+= 1
                 else:
                     continue
-            return param_tensor
+            # set all oscillators on
+            param_tensor[:,[44, 66, 88, 110, 132, 154]] = 1.0
+            # set default filter
+            param_tensor[:,0] = 1.0
+            param_tensor[:,1] = 0.0
+            param_tensor[:,2] = 1.0
+            param_tensor[:,3] = 0.5
+            param_tensor[:,13] = 0.5
+            param_arr = param_tensor.detach().numpy()
+            
+            return param_arr
         else:
             return self.params
         
