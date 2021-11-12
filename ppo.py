@@ -185,12 +185,13 @@ def n_trainable_params(model):
 
 
 class PPO:
-	def __init__(self, actor, critic, num_continuous, actor_lr=1e-3, critic_lr=1e-3):
+	def __init__(self, actor, critic, num_continuous, actor_lr=1e-3, critic_lr=1e-3, gamma=0.9):
 		super().__init__()
 		self.actor = actor
 		self.critic = critic
 		self.actor_lr = actor_lr
 		self.critic_lr = critic_lr
+		self.gamma = gamma
 
 		self.num_continuous = num_continuous
 
@@ -243,10 +244,22 @@ class PPO:
 
 	def compute_rtgs(self, batch_rewards):
 		"""Compute rewards-to-go
-		
-		TODO: implement
+  
+		batch_rewards shape: [batch_size, num_steps_in_episode]
+		output returns (ie., rewards to go): [batch_size, num_steps_in_episode]
 		"""
-		pass
+		batch_returns = torch.zeros_like(batch_rewards)
+		
+		# The returns at the last time step is just equal to the reward at that last time step
+		batch_returns[:,-1] = batch_rewards[:,-1]
+
+		num_steps_in_episode = batch_rewards.shape[1]
+		
+		# Now, we loop thrrough each time step in reverse, from the second to last time step, to the first timestep
+		for step_idx in reversed(range(num_steps_in_episode - 1)):
+			batch_returns[:,step_idx] = batch_rewards[:,step_idx] + (self.gamma * batch_returns[:,step_idx+1])
+
+		return batch_returns
 
 	def rollout(self, init_states, n_steps):
 		""" Do rollouts and return whats returned in other imp """
