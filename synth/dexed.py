@@ -500,9 +500,9 @@ class Dexed:
 
     @staticmethod
     def get_numerical_params_indexes_learnable():
-        indexes = [0, 1, 2, 3, 5,  # cutoff, reso, output, master tune, feedback (card:8)
+        indexes = [5,  # feedback (card:8)
                    7, 8, 9, 10,  # lfo speed, lfo delay (before LFO actually modulates), lfo pm depth, lfo am depth
-                   13, 14, 15, 16, 17, 18, 19, 20, 21, 22]  # transpose, pitch mod sensitivity, pitch EG rates/levels
+                   14, 15, 16, 17, 18, 19, 20, 21, 22]  # transpose, pitch mod sensitivity, pitch EG rates/levels
         for i in range(6):  # operators
             for j in [23, 24, 25, 26, 27, 28, 29, 30]:  # rates and levels
                 indexes.append(j + 22*i)
