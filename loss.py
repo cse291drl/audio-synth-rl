@@ -124,6 +124,8 @@ def generateLearnableIndices(param_length, numerical_set, categorical_set):
         if vst_idx in numerical_set:
             learnable_num.append(learn_idx)
             learn_idx += 1
+    num_len = learn_idx + 1
+    learn_idx = 0
     for vst_idx in range(param_length):
         if vst_idx in categorical_set:
             n_classes = Dexed.get_param_cardinality(vst_idx)
@@ -132,7 +134,8 @@ def generateLearnableIndices(param_length, numerical_set, categorical_set):
                 cat_list.append(learn_idx)
                 learn_idx += 1
             learnable_cat.append(cat_list)
-    return learnable_num, learnable_cat, learn_idx+1
+    cat_len = learn_idx+1
+    return learnable_num, learnable_cat, num_len, cat_len
             
     
 
@@ -141,18 +144,28 @@ class presetParam():
     This class is a wrapper for parameters, allowing one to switch between the learnable tensor which is onehot encoded,
     and the numpy array which is required for plugging into the synthesizer
     '''
-    def __init__(self, preset_params, param_length = 155, learnable = False, device = 'cpu'):
-        self.params = preset_params
-        if param_length is None:
-            self.preset_length = self.params.shape[1]
+    def __init__(self, params, param_length = 155, learnable = False, device = 'cpu'):
+        self.params = params
+        if isinstance(params, tuple):
+            self._batch_size = self.params[0].shape[0]
+            if param_length is None:
+                self.preset_length = self.params[0].shape[1]
+            else:
+                self.preset_length = param_length
+            self.device = device
         else:
-            self.preset_length = param_length
-        self._batch_size = preset_params.shape[0]
+            self._batch_size = self.params.shape[0]
+            if param_length is None:
+                self.preset_length = self.params.shape[1]
+            else:
+                self.preset_length = param_length
+            self.device = device
         # print(preset_params.shape)
-        self.device = device
+        
         self.numerical_set = set(Dexed.get_numerical_params_indexes_learnable())
         self.categorical_set = set(Dexed.get_categorical_params_indexes_learnable())
-        self.learnable_num, self.learnable_cat, self.learnable_preset_size = generateLearnableIndices(self.preset_length,\
+        self.learnable_num, self.learnable_cat,\
+            self.learnable_num_size, self.learnable_cat_size = generateLearnableIndices(self.preset_length,\
                                                                           self.numerical_set,self.categorical_set)
         self.learnable = learnable
         if learnable:
@@ -164,7 +177,7 @@ class presetParam():
         if self.learnable:
             return self.params
         else:
-            learnable_tensor = torch.empty((self._batch_size, self.learnable_preset_size),
+            num_tensor = torch.empty((self._batch_size, self.learnable_num_size),
                                             device=self.device, requires_grad=False)
             # print(len(self.params))
             # Numerical/categorical in VST preset are *always* stored as numerical (whatever their true
@@ -175,9 +188,11 @@ class presetParam():
             for vst_idx in range(self.preset_length):
                 if vst_idx in self.numerical_set:  # learned as numerical: OK, simple copy
                     idx = self.learnable_num[num_counter]  # type: int
-                    learnable_tensor[:, idx] = self.params[:,vst_idx]
+                    num_tensor[:, idx] = self.params[:,vst_idx]
                     num_counter += 1
                     learn_indexes += 1
+            cat_tensor = torch.empty((self._batch_size, self.learnable_cat_size),
+                                            device=self.device, requires_grad=False)
             for vst_idx in range(self.preset_length):
                 if vst_idx in self.categorical_set:  # Learnable params only:  # learned as categorical: one-hot encoding
                     assert isinstance(self.learnable_cat[cat_counter],Iterable) # Sanity check
@@ -189,20 +204,20 @@ class presetParam():
                     # print(f"cat_index {cat_index}")
                     # print(f"n_classes {n_classes}")
                     assert len(cat_index) == n_classes
-                    learnable_tensor[:, cat_index] = classes_one_hot.type(torch.float)
+                    cat_tensor[:, cat_index] = classes_one_hot.type(torch.float)
                     cat_counter += 1
                     learn_indexes += n_classes
-            return learnable_tensor
+            return (num_tensor, cat_tensor)
         
     def to_params(self, sample = False): # returns numpy
         if self.learnable:
-            param_tensor = torch.empty((self._batch_size,self.preset_length),device=self.params.device, requires_grad=False)
+            param_tensor = torch.empty((self._batch_size,self.preset_length),device=self.device, requires_grad=False)
             learn_indexes = 0 # For debug
             cat_counter = 0
             num_counter = 0
             for vst_idx in range(self.preset_length):
                 if vst_idx in self.numerical_set:
-                    param_tensor[:,vst_idx] = self.params[:,self.learnable_num[num_counter]]
+                    param_tensor[:,vst_idx] = self.params[0][:,self.learnable_num[num_counter]]
                     num_counter+= 1
                     learn_indexes+= 1
             for vst_idx in range(self.preset_length):
@@ -210,7 +225,7 @@ class presetParam():
                     assert isinstance(self.params,Iterable) # Ensure one-hot encoding varible
                     n_classes = Dexed.get_param_cardinality(vst_idx)
                     cat_index = self.learnable_cat[cat_counter]
-                    param_tensor[:,vst_idx] = torch.argmax(self.params[:,cat_index]).type(torch.float)/(n_classes - 1)
+                    param_tensor[:,vst_idx] = torch.argmax(self.params[1][:,cat_index]).type(torch.float)/(n_classes - 1)
                     cat_counter += 1
                     learn_indexes += n_classes
             # set all oscillators on
