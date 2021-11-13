@@ -13,6 +13,9 @@ from data_modules.data_modules import AudioHandler, TargetSoundDataset
 from loss import presetParam
 from synth.dexed import Dexed
 
+from torch.utils.tensorboard import SummaryWriter
+
+import datetime
 import dask
 
 class CNNFeatExtractor(nn.Module):
@@ -167,7 +170,7 @@ class BasicCriticHead(nn.Module):
 	def forward(self, x):
 		x = self.dropout1(self.act1(self.fc1(x)))
 		x = self.dropout2(self.act2(self.fc2(x)))
-		return self.fc3(x)		
+		return self.fc3(x)	
 
 
 class ComparerNetwork(nn.Module):
@@ -532,9 +535,13 @@ class PPO:
 		# vstack will return tensors whose shape starts with: (num_steps_per_episode, rollout_batch_size,...)
 		# so, .transpose(0,1) will make the tensors' shapes start with: (rollout_batch_size, num_steps_per_episode)
 		batch_obs['target_spectrogram'] = torch.stack(batch_obs['target_spectrogram']).transpose(0,1)
+		batch_obs_unrolled_target_spectrogram = batch_obs['target_spectrogram']
 		batch_obs['target_spectrogram'] = batch_obs['target_spectrogram'].reshape(-1, *batch_obs['target_spectrogram'].shape[2:])
-		batch_obs['current_spectrogram'] = torch.stack(batch_obs['current_spectrogram']).transpose(0,1)
+		
+  		batch_obs['current_spectrogram'] = torch.stack(batch_obs['current_spectrogram']).transpose(0,1)
+		batch_obs_unrolled_current_spectrogram = batch_obs['current_spectrogram']
 		batch_obs['current_spectrogram'] = batch_obs['current_spectrogram'].reshape(-1, *batch_obs['current_spectrogram'].shape[2:])
+
 		batch_obs['current_params'] = torch.stack(batch_obs['current_params']).transpose(0,1)
 		batch_obs['current_params'] = batch_obs['current_params'].reshape(-1, *batch_obs['current_params'].shape[2:])
 		# print(f"cur params {batch_obs['current_params'].shape}")		
@@ -559,17 +566,17 @@ class PPO:
 		# print(f"batch_discrete_log_probs {batch_discrete_log_probs.shape}")	
   
 		# First, reshape batch_rews into (rollout_batch_size, num_steps_per_episode)
-		batch_rews = torch.stack(batch_rews).transpose(0,1).squeeze(-1)
+		batch_rews_unrolled = torch.stack(batch_rews).transpose(0,1).squeeze(-1)
 		# print(f"batch_rews {batch_rews.shape}")	
 		# Compute returns to go using batch_rews: shape: (rollout_batch_size, num_steps_per_episode)
 		# Also reshape batch_rtgs from (rollout_batch_size, num_steps_per_episode) into (rollout_batch_size*num_steps_per_episode,1)
-		batch_rtgs = self.compute_rtgs(batch_rews).transpose(0,1).reshape(-1,1)
+		batch_rtgs = self.compute_rtgs(batch_rews_unrolled).transpose(0,1).reshape(-1,1)
 		# print(f"batch_rtgs {batch_rtgs.shape}")	
 		# Finally, reshape batch_rews into (rollout_batch_size*num_steps_per_episode,1)
-		batch_rews = batch_rews.reshape(-1, 1)
+		batch_rews = batch_rews_unrolled.reshape(-1, 1)
 		# print(f"batch_rews22222 {batch_rews.shape}")	
   
-		return batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs
+		return batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram
 
 	def evaluate(self, batch_obs, batch_acts):
 		"""
@@ -623,12 +630,23 @@ class PPO:
 
 if __name__ == '__main__':
 	__spec__ = None
+ 
+	writer = SummaryWriter()
 
 	# hyperparameters
 	steps_per_episode = 2 # 25
 	rollout_batch_size = 2 # 32
 	num_train_iter = 100
 	n_updates_per_iteration = 5	 # Number of times to update actor/critic per iteration
+ 	use_multiprocessing_for_spectrogram_metrics = True
+	checkpoint_every_n_iters = 10
+ 
+	checkpoints_parent_dir = "./checkpointed_models"
+	checkpoint_run_id = str(datetime.datetime.utcnow())
+	checkpoints_dir = os.path.join(checkpoints_parent_dir, checkpoint_run_id)
+	os.makedirs(checkpoints_dir)
+ 
+	print (f"Checkpointing to: {checkpoints_dir}")
 
 	# Load the target sounds
 	dataset = TargetSoundDataset(
@@ -699,6 +717,9 @@ if __name__ == '__main__':
 
 	# Training loop
 	target_iterator = iter(target_sound_loader)
+ 
+ 
+	iter_index = 0
 
 	for i in tqdm(range(num_train_iter)):
 		# Rollout from rollout_batch_size starts
@@ -724,7 +745,7 @@ if __name__ == '__main__':
 			'current_params': init_params,
 			'steps_remaining': init_steps_remaining
 		}
-
+		
 		# Do rollouts
 		"""
 		Expected shapes of below variables:
@@ -735,7 +756,44 @@ if __name__ == '__main__':
 		batch_log_probs:		(rollout_batch_size * num_steps_per_episode, 1)
 		batch_rtgs:				(rollout_batch_size * num_steps_per_episode, 1)
 		"""
-		batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
+		batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
+
+		# Log
+		# batch_rews_unrolled: (rollout_batch_size, num_steps_per_episode)
+		writer.add_scalar('train/avg_discounted_reward', batch_rews_unrolled[:,0].mean().item(), iter_index)
+
+		# batch_obs_unrolled_target_spectrogram: (rollout_batch_size, num_steps_per_episode, *spectrogram_shape)
+		batch_target_specs = batch_obs_unrolled_target_spectrogram[:,-1]
+		batch_last_predicted_specs = batch_obs_unrolled_current_spectrogram[:,-1]
+		
+  		mae_log_vals = []
+		sc_vals = []
+  
+		def _compute_mae_log_and_sc(target_spectrogram, predicted_spectrogram):
+			audiohandler = AudioHandler()
+			return float(audiohandler.getMAE(target_spectrogram,predicted_spectrogram)), float(audiohandler.getSpectralConvergence(target_spectrogram,predicted_spectrogram)) 
+  
+		# Use multiprocessing
+		if use_multiprocessing_for_spectrogram_metrics:
+			spec_metric_jobs = []
+			for _target_spectrogram, _predicted_spectrogram in zip(batch_target_specs, batch_last_predicted_specs):
+				spec_metric_jobs.append(dask.delayed(_compute_mae_log_and_sc)(_target_spectrogram, _predicted_spectrogram))
+			spec_metric_jobs = dask.compute(*spec_metric_jobs, scheduler="processes")
+			
+			for _mae_log, _sc in spec_metric_jobs:
+				mae_log_vals.append(_mae_log)
+				sc_vals.append(_sc)
+		else:
+			for _target_spectrogram, _predicted_spectrogram in zip(batch_target_specs, batch_last_predicted_specs):
+				_mae_log, _sc = _compute_mae_log_and_sc(_target_spectrogram, _predicted_spectrogram)
+				mae_log_vals.append(_mae_log)
+				sc_vals.append(_sc)
+
+		avg_mae_log = sum(mae_log_vals)/len(mae_log_vals)
+		avg_sc = sum(sc_vals)/len(sc_vals)
+
+		writer.add_scalar('train/avg_mae_log', avg_mae_log, iter_index)
+		writer.add_scalar('train/avg_sc', avg_sc, iter_index)
 
 		# Compute advantages and normalize
 		V, _ = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
@@ -775,7 +833,10 @@ if __name__ == '__main__':
 			actor_loss = (-torch.min(surr1_cont, surr2_cont)).mean() + (-torch.min(surr1_disc, surr2_disc)).mean()
 			critic_loss = nn.MSELoss()(V, batch_rtgs)
 
-			print(f"Actor loss: {actor_loss.item()}, Critic loss: {critic_loss.item()}")
+			# print(f"Actor loss: {actor_loss.item()}, Critic loss: {critic_loss.item()}")
+    		writer.add_scalar('train/actor_loss', actor_loss.item(), iter_index)
+    		writer.add_scalar('train/critic_loss', critic_loss.item(), iter_index)
+
 			# Calculate gradients and perform backward propagation for actor network
 			ppo_model.actor_optim.zero_grad()
 			actor_loss.backward(retain_graph=True)
@@ -785,3 +846,16 @@ if __name__ == '__main__':
 			ppo_model.critic_optim.zero_grad()
 			critic_loss.backward()
 			ppo_model.critic_optim.step()
+   
+			iter_index += 1
+   
+		if i % checkpoint_every_n_iters:
+			torch.save(
+				{
+					'training_iteration': i,
+					'ppo_model_state_dict': ppo_model.state_dict(),
+					'actor_optim_state_dict': ppo_model.actor_optim.state_dict(),
+					'critic_optim_state_dict': ppo_model.critic_optim.state_dict(),
+				},
+				os.path.join(checkpoints_dir, f"model_training_iteration_{i}.pt")
+            )
