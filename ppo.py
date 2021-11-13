@@ -302,7 +302,7 @@ class PPO:
 								'steps_remaining': (rollout_batch_size, 1)
 				rewards:	(rollout_batch_size, 1)
 		"""
-		batch_size = actions.size(0)
+		batch_size = actions.size[0]
 		pred_states = {
 			"target_spectrogram" : states['target_spectrogram'], 
 			"current_spectrogram" : [],
