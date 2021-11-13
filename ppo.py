@@ -291,8 +291,8 @@ class PPO:
 			if self.reward_metric == "mae":
 				rew = -self.audiohandler.getMAE(states[i],pred_states[i])
 			else:
-       			# TODO: how does sc behave? is a higher sc a better/higher reward?
-          		rew = self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
+				# TODO: how does sc behave? is a higher sc a better/higher reward?
+				rew = self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
 			rewards.append(rew)
    
 		pred_states['current_spectrogram'] = torch.vstack(pred_states['current_spectrogram'])
