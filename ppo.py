@@ -493,7 +493,7 @@ class PPO:
 		dist = MultivariateNormal(cont_means, cov_mat)
 		log_probs = dist.log_prob(batch_acts[:, self.cont_param_indices])
 
-		# for descrete
+		# for discrete
 		for dexed_idx, log_idx in self.desc_params_dict.items():
 			logits = action_logits[:, log_idx]
 			dist = Categorical(logits=logits)
@@ -620,7 +620,7 @@ if __name__ == '__main__':
 		A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
 		# Update actor and critic
-		
+
 		# TODO: Construct a Dataset object here? 
 		for j in range(n_updates_per_iteration):
 			# Calculate V_phi and pi_theta(a_t | s_t)
