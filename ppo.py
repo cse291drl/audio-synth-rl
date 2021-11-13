@@ -13,6 +13,8 @@ from data_modules.data_modules import AudioHandler, TargetSoundDataset
 from loss import presetParam
 from synth.dexed import Dexed
 
+import uuid
+
 from torch.utils.tensorboard import SummaryWriter
 
 import datetime
@@ -330,10 +332,10 @@ class PPO:
   
 		# Multiprocessing approach to generating the spectrogram for all samples in the batch
 		jobs = []
-		def get_next_state_and_reward_job(i, audiohandler, pred_states, continuous_actions, discrete_actions, reward_metric):
+		def get_next_state_and_reward_job(i, pred_states, continuous_actions, discrete_actions, reward_metric):
 			# Convert learnable param to synthesizer param
 			param = presetParam((continuous_actions[i].unsqueeze(0), discrete_actions[i].unsqueeze(0)), learnable=True)
-
+			audiohandler = AudioHandler()
 			# Get next state
 			predicted_spectrogram = audiohandler.generateSpectrogram(param.to_params()[0])
 
@@ -348,7 +350,6 @@ class PPO:
 		for i in range(batch_size):
 			if self.use_multiprocessing:
 				jobs.append(dask.delayed(get_next_state_and_reward_job)(i, 
-                                                            self.audiohandler, 
                                                             pred_states, 
                                                             continuous_actions, 
                                                             discrete_actions, 
@@ -493,7 +494,7 @@ class PPO:
 		obs = init_states
 
 		# Step through episode from each initial state in parallel
-		for i in tqdm(range(n_steps)):
+		for i in range(n_steps):
 			# Add current state info (obs) to batch_obs
 			for k,v in obs.items():
 				batch_obs[k].append(v)
@@ -538,7 +539,7 @@ class PPO:
 		batch_obs_unrolled_target_spectrogram = batch_obs['target_spectrogram']
 		batch_obs['target_spectrogram'] = batch_obs['target_spectrogram'].reshape(-1, *batch_obs['target_spectrogram'].shape[2:])
 		
-  		batch_obs['current_spectrogram'] = torch.stack(batch_obs['current_spectrogram']).transpose(0,1)
+		batch_obs['current_spectrogram'] = torch.stack(batch_obs['current_spectrogram']).transpose(0,1)
 		batch_obs_unrolled_current_spectrogram = batch_obs['current_spectrogram']
 		batch_obs['current_spectrogram'] = batch_obs['current_spectrogram'].reshape(-1, *batch_obs['current_spectrogram'].shape[2:])
 
@@ -635,14 +636,14 @@ if __name__ == '__main__':
 
 	# hyperparameters
 	steps_per_episode = 2 # 25
-	rollout_batch_size = 2 # 32
+	rollout_batch_size = 16 # 32
 	num_train_iter = 100
 	n_updates_per_iteration = 5	 # Number of times to update actor/critic per iteration
- 	use_multiprocessing_for_spectrogram_metrics = True
+	use_multiprocessing_for_spectrogram_metrics = True
 	checkpoint_every_n_iters = 10
  
-	checkpoints_parent_dir = "./checkpointed_models"
-	checkpoint_run_id = str(datetime.datetime.utcnow())
+	checkpoints_parent_dir = "checkpointed_models"
+	checkpoint_run_id = str(uuid.uuid4())
 	checkpoints_dir = os.path.join(checkpoints_parent_dir, checkpoint_run_id)
 	os.makedirs(checkpoints_dir)
  
@@ -660,7 +661,8 @@ if __name__ == '__main__':
 		dataset=dataset,
 		batch_size=rollout_batch_size,
 		num_workers=4,
-		shuffle=True
+		shuffle=True,
+		persistent_workers=True
 	)
 
 	# Parameters about the data
@@ -706,14 +708,13 @@ if __name__ == '__main__':
 
 	print(n_trainable_params(actor))
 	print(n_trainable_params(critic))
-
+	print(f"Dataset len: {len(dataset)}")
 	# Initialize the PPO object
 	ppo_model = PPO(actor, critic)
 
 	# Test get actions and eval
 	actions, probs = ppo_model.get_actions(test_state_batch)
 	V, lp = ppo_model.evaluate(test_state_batch, actions)
-
 
 	# Training loop
 	target_iterator = iter(target_sound_loader)
@@ -766,7 +767,7 @@ if __name__ == '__main__':
 		batch_target_specs = batch_obs_unrolled_target_spectrogram[:,-1]
 		batch_last_predicted_specs = batch_obs_unrolled_current_spectrogram[:,-1]
 		
-  		mae_log_vals = []
+		mae_log_vals = []
 		sc_vals = []
   
 		def _compute_mae_log_and_sc(target_spectrogram, predicted_spectrogram):
@@ -805,7 +806,7 @@ if __name__ == '__main__':
 		# Update actor and critic
 
 		# TODO: Construct a Dataset object here?
-		for j in tqdm(range(n_updates_per_iteration)):
+		for j in range(n_updates_per_iteration):
 			# Calculate V_phi and pi_theta(a_t | s_t)
 			V, curr_log_probs = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
 
@@ -834,8 +835,8 @@ if __name__ == '__main__':
 			critic_loss = nn.MSELoss()(V, batch_rtgs)
 
 			# print(f"Actor loss: {actor_loss.item()}, Critic loss: {critic_loss.item()}")
-    		writer.add_scalar('train/actor_loss', actor_loss.item(), iter_index)
-    		writer.add_scalar('train/critic_loss', critic_loss.item(), iter_index)
+			writer.add_scalar('train/actor_loss', actor_loss.item(), iter_index)
+			writer.add_scalar('train/critic_loss', critic_loss.item(), iter_index)
 
 			# Calculate gradients and perform backward propagation for actor network
 			ppo_model.actor_optim.zero_grad()
@@ -848,14 +849,14 @@ if __name__ == '__main__':
 			ppo_model.critic_optim.step()
    
 			iter_index += 1
-   
-		if i % checkpoint_every_n_iters:
+		if i % checkpoint_every_n_iters == 0:
 			torch.save(
 				{
 					'training_iteration': i,
-					'ppo_model_state_dict': ppo_model.state_dict(),
+					'ppo_actor_model_state_dict': ppo_model.actor.state_dict(),
+					'ppo_critic_model_state_dict': ppo_model.critic.state_dict(),
 					'actor_optim_state_dict': ppo_model.actor_optim.state_dict(),
 					'critic_optim_state_dict': ppo_model.critic_optim.state_dict(),
 				},
 				os.path.join(checkpoints_dir, f"model_training_iteration_{i}.pt")
-            )
+			)
