@@ -146,19 +146,12 @@ class presetParam():
     '''
     def __init__(self, params, param_length = 155, learnable = False, device = 'cpu'):
         self.params = params
+        self.preset_length = param_length
         if isinstance(params, tuple):
             self._batch_size = self.params[0].shape[0]
-            if param_length is None:
-                self.preset_length = self.params[0].shape[1]
-            else:
-                self.preset_length = param_length
             self.device = device
         else:
             self._batch_size = self.params.shape[0]
-            if param_length is None:
-                self.preset_length = self.params.shape[1]
-            else:
-                self.preset_length = param_length
             self.device = device
         # print(preset_params.shape)
         
