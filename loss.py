@@ -121,6 +121,10 @@ def generateLearnableIndices(param_length, numerical_set, categorical_set):
     learnable_cat = []
     learn_idx = 0
     for vst_idx in range(param_length):
+        if vst_idx in numerical_set:
+            learnable_num.append(learn_idx)
+            learn_idx += 1
+    for vst_idx in range(param_length):
         if vst_idx in categorical_set:
             n_classes = Dexed.get_param_cardinality(vst_idx)
             cat_list = []
@@ -128,9 +132,6 @@ def generateLearnableIndices(param_length, numerical_set, categorical_set):
                 cat_list.append(learn_idx)
                 learn_idx += 1
             learnable_cat.append(cat_list)
-        elif vst_idx in numerical_set:
-            learnable_num.append(learn_idx)
-            learn_idx += 1
     return learnable_num, learnable_cat, learn_idx+1
             
     
@@ -172,6 +173,12 @@ class presetParam():
             cat_counter = 0
             num_counter = 0
             for vst_idx in range(self.preset_length):
+                if vst_idx in self.numerical_set:  # learned as numerical: OK, simple copy
+                    idx = self.learnable_num[num_counter]  # type: int
+                    learnable_tensor[:, idx] = self.params[:,vst_idx]
+                    num_counter += 1
+                    learn_indexes += 1
+            for vst_idx in range(self.preset_length):
                 if vst_idx in self.categorical_set:  # Learnable params only:  # learned as categorical: one-hot encoding
                     assert isinstance(self.learnable_cat[cat_counter],Iterable) # Sanity check
                     n_classes = Dexed.get_param_cardinality(vst_idx)
@@ -185,13 +192,6 @@ class presetParam():
                     learnable_tensor[:, cat_index] = classes_one_hot.type(torch.float)
                     cat_counter += 1
                     learn_indexes += n_classes
-                elif vst_idx in self.numerical_set:  # learned as numerical: OK, simple copy
-                    idx = self.learnable_num[num_counter]  # type: int
-                    learnable_tensor[:, idx] = self.params[:,vst_idx]
-                    num_counter += 1
-                    learn_indexes += 1
-                else:
-                    continue
             return learnable_tensor
         
     def to_params(self, sample = False): # returns numpy
@@ -201,6 +201,11 @@ class presetParam():
             cat_counter = 0
             num_counter = 0
             for vst_idx in range(self.preset_length):
+                if vst_idx in self.numerical_set:
+                    param_tensor[:,vst_idx] = self.params[:,self.learnable_num[num_counter]]
+                    num_counter+= 1
+                    learn_indexes+= 1
+            for vst_idx in range(self.preset_length):
                 if vst_idx in self.categorical_set:
                     assert isinstance(self.params,Iterable) # Ensure one-hot encoding varible
                     n_classes = Dexed.get_param_cardinality(vst_idx)
@@ -208,12 +213,6 @@ class presetParam():
                     param_tensor[:,vst_idx] = torch.argmax(self.params[:,cat_index]).type(torch.float)/(n_classes - 1)
                     cat_counter += 1
                     learn_indexes += n_classes
-                elif vst_idx in self.numerical_set:
-                    param_tensor[:,vst_idx] = self.params[:,self.learnable_num[num_counter]]
-                    num_counter+= 1
-                    learn_indexes+= 1
-                else:
-                    continue
             # set all oscillators on
             param_tensor[:,[44, 66, 88, 110, 132, 154]] = 1.0
             # set default filter
@@ -223,7 +222,6 @@ class presetParam():
             param_tensor[:,3] = 0.5
             param_tensor[:,13] = 0.5
             param_arr = param_tensor.detach().numpy()
-            
             return param_arr
         else:
             return self.params

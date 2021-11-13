@@ -147,6 +147,10 @@ class AudioHandler:
 		mapping_dict = {'Numerical':[],'Categorical':[]}
 		learn_idx = 0
 		for vst_idx in range(preset_length):
+			if vst_idx in numerical_set:
+				mapping_dict['Numerical'].append({vst_idx:learn_idx})
+				learn_idx += 1
+		for vst_idx in range(preset_length):
 			if vst_idx in categorical_set:
 				n_classes = Dexed.get_param_cardinality(vst_idx)
 				cat_list = []
@@ -154,9 +158,6 @@ class AudioHandler:
 					cat_list.append(learn_idx)
 					learn_idx += 1
 				mapping_dict['Categorical'].append({vst_idx:cat_list})
-			elif vst_idx in numerical_set:
-				mapping_dict['Numerical'].append({vst_idx:learn_idx})
-				learn_idx += 1
 		return mapping_dict  
 
 class TargetSoundDataModule(pl.LightningDataModule):
