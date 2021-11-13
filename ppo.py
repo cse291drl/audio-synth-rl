@@ -315,7 +315,7 @@ class PPO:
 		
 		for i in range(len(states)):
 			# Convert learnable param to synthesizer param
-			param = presetParam((actions[0][i],actions[1][i]), learnable=True)
+			param = presetParam(actions[i], learnable=True)
 
 			# Get next state
 			predicted_spectrogram = self.audiohandler.generateSpectrogram(param.to_params())
@@ -326,7 +326,7 @@ class PPO:
 				rew = -self.audiohandler.getMAE(states[i],pred_states[i])
 			else:
 				# TODO: how does sc behave? is a higher sc a better/higher reward?
-				rew = -self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
+				rew = self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
 			rewards.append(rew)
    
 		pred_states['current_spectrogram'] = torch.vstack(pred_states['current_spectrogram'])
