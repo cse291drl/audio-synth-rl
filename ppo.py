@@ -239,14 +239,18 @@ class PPO:
 
 		# Mapping stuff
 		self.continuous_params_dict = {
-			k:v for element in AudioHandler.get_mapping_dict()['Numerical'] for k,v in element.items()
+			k:v 
+   			for element in AudioHandler.get_mapping_dict()['Numerical'] 
+      		for k,v in element.items()
 		}
 		self.cont_logit_indices = np.array(list(self.continuous_params_dict.values()))
 		self.cont_param_indices = np.array(list(self.continuous_params_dict.keys()))
 		self.num_continuous = len(self.cont_logit_indices)
 
 		self.disc_params_dict = {
-			k:v for element in AudioHandler.get_mapping_dict()['Categorical'] for k,v in element.items()
+			k:v 
+   			for element in AudioHandler.get_mapping_dict()['Categorical'] 
+      		for k,v in element.items()
 		}
 
 		# Initialize optimizers for actor and critic
@@ -318,7 +322,7 @@ class PPO:
 		
 		for i in range(batch_size):
 			# Convert learnable param to synthesizer param
-			param = presetParam(actions[i], learnable=True)
+			param = presetParam((continuous_actions[i], discrete_actions[i]), learnable=True)
 
 			# Get next state
 			predicted_spectrogram = self.audiohandler.generateSpectrogram(param.to_params())
@@ -441,8 +445,10 @@ class PPO:
 			"steps_remaining" : [],
 		}
 
-		batch_acts = [] # batched tensor: (rollout_batch_size, num_steps_per_episode, num_action_dims)
-		batch_log_probs = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
+		batch_continuous_acts = [] # batched tensor: (rollout_batch_size, num_steps_per_episode, num_continuous_actions)
+  		batch_discrete_acts = [] # batched tensor: (rollout_batch_size, num_steps_per_episode, num_discrete_actions)
+		batch_continuous_log_probs = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
+		batch_discrete_log_probs = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
 		batch_rews = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
 
 		obs = init_states
@@ -455,18 +461,28 @@ class PPO:
 
 			# Get action from actor and take step
 			# Note on the shapes of the tensors below:
-			#	actions: (rollout_batch_size, num_action_dims)
-			#	_log_probs: (rollout_batch_size, 1)
+			#	continuous_actions: (rollout_batch_size, num_continuous_action_dims)
+			#	discrete_actions: (rollout_batch_size, num_discrete_action_dims)
+			#	continuous_log_probs: (rollout_batch_size, 1)
+			#	discrete_log_probs: (rollout_batch_size, 1)
 			#	obs: dict of batched tensors (representing the next state) 
 			# 			with the tensors having the SAME shape as the tensors in init_states
 			#	rews: (rollout_batch_size, 1)
 			# TODO: Ensure that the variables below match their expected shapes listed above
-			actions, _log_probs = self.get_actions(obs)
-			obs, rews = self.step(obs, actions)
+			actions, _log_probs = self.get_actions(obs)   
+			continuous_actions = actions['cont_actions']
+			discrete_actions = actions['disc_actions']
+   
+			continuous_log_probs = _log_probs['cont_log_probs']
+			discrete_log_probs = _log_probs['disc_log_probs']
+			   
+			obs, rews = self.step(obs, continuous_actions=continuous_actions, discrete_actions=discrete_actions)
 
-			# Update actions, action log probs, and rewards
-			batch_acts.append(actions)
-			batch_log_probs.append(_log_probs)
+			# Update continuous/discrete actions, continuous/discrete action log probs, and rewards
+			batch_continuous_acts.append(continuous_actions)
+			batch_discrete_acts.append(discrete_actions)
+			batch_continuous_log_probs.append(continuous_log_probs)
+			batch_discrete_log_probs.append(discrete_log_probs)
 			batch_rews.append(rews)
 
 		### Correctly reshape all aggregated tensors across all batches & rollouts ###
@@ -486,10 +502,12 @@ class PPO:
 		batch_obs['steps_remaining'] = torch.vstack(batch_obs['steps_remaining']).transpose(0,1).view(-1, *batch_obs['steps_remaining'].shape[2:])
    
 		# Reshape batch_acts into: (rollout_batch_size * num_steps_per_episode, n_params)
-		batch_acts = torch.vstack(batch_acts).transpose(0,1).view(-1, *batch_acts.shape[2:])
+		batch_continuous_acts = torch.vstack(batch_continuous_acts).transpose(0,1).view(-1, *batch_continuous_acts.shape[2:])
+		batch_discrete_acts = torch.vstack(batch_discrete_acts).transpose(0,1).view(-1, *batch_discrete_acts.shape[2:])
   
 		# Reshape batch_log_probs into (rollout_batch_size * num_steps_per_episode, 1)
-		batch_log_probs = torch.vstack(batch_log_probs).transpose(0,1).view(-1,1)
+		batch_continuous_log_probs = torch.vstack(batch_continuous_log_probs).transpose(0,1).view(-1,1)
+		batch_discrete_log_probs = torch.vstack(batch_discrete_log_probs).transpose(0,1).view(-1,1)
   
 		# First, reshape batch_rews into (rollout_batch_size, num_steps_per_episode)
 		batch_rews = torch.vstack(batch_rews).transpose(0,1)
@@ -501,7 +519,7 @@ class PPO:
 		# Finally, reshape batch_rews into (rollout_batch_size*num_steps_per_episode,1)
 		batch_rews = batch_rews.view(-1, 1)
   
-		return batch_obs, batch_acts, batch_log_probs, batch_rtgs
+		return batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs
 
 	def evaluate(self, batch_obs, batch_acts):
 		"""
@@ -511,7 +529,7 @@ class PPO:
 			Parameters:
 				batch_obs - the observations from the most recently collected batch as a tensor.
 							Shape: (number of timesteps in batch, dimension of observation)
-				batch_acts - the actions from the most recently collected batch as a tensor.
+				batch_acts - dict {'cont_actions' : ..., 'disc_actions' : ....}
 							Shape: (number of timesteps in batch, dimension of action)
 			Return:
 				V - the predicted values of batch_obs
@@ -667,10 +685,10 @@ if __name__ == '__main__':
 		batch_log_probs:		(rollout_batch_size * num_steps_per_episode, 1)
 		batch_rtgs:				(rollout_batch_size * num_steps_per_episode, 1)
 		"""
-		(batch_obs, batch_acts, batch_log_probs, batch_rtgs) = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
+		batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
 		
 		# Compute advantages and normalize
-		V, _ = ppo_model.evaluate(batch_obs, batch_acts)
+		V, _ = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
 		A_k = batch_rtgs - V.detach()
 		A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
@@ -680,7 +698,6 @@ if __name__ == '__main__':
 		for j in range(n_updates_per_iteration):
 			# Calculate V_phi and pi_theta(a_t | s_t)
 			V, curr_log_probs = ppo_model.evaluate(batch_obs, batch_acts)
-   
    
 			## Backprop w.r.t continuous log probs
 
