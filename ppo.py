@@ -202,12 +202,12 @@ class ValueModel(nn.Module):
 class ActorModel(nn.Module):
 	""" Hybrid actor model """
 	def __init__(self, sound_comparer, intermediate_layers, continuous_head,
-			descrete_head):
+			discrete_head):
 		super().__init__()
 		self.sound_comparer = sound_comparer
 		self.intermediate_layers = intermediate_layers
 		self.continuous_head = continuous_head
-		self.descrete_head = descrete_head
+		self.discrete_head = discrete_head
 
 	def forward(self, state):
 		sound_dif_emb = self.sound_comparer(state)
@@ -216,7 +216,7 @@ class ActorModel(nn.Module):
 			dim=-1
 		)
 		x = self.intermediate_layers(comb_emb)
-		return self.continuous_head(x), self.descrete_head(x)
+		return self.continuous_head(x), self.discrete_head(x)
 
 
 def n_trainable_params(model):
@@ -227,8 +227,6 @@ class PPO:
 	def __init__(self, actor, critic, actor_lr=1e-3, critic_lr=1e-3, gamma=0.9,
 			cov_matrix_val=.01, reward_metric = "mae"):
 		super().__init__()
-  
-		
 		self.actor = actor
 		self.critic = critic
 		self.actor_lr = actor_lr
@@ -249,7 +247,7 @@ class PPO:
 		self.cont_param_indices = np.array(list(self.continuous_params_dict.keys()))
 		self.num_continuous = len(self.cont_logit_indices)
 
-		self.desc_params_dict = {
+		self.disc_params_dict = {
 			k:v for element in AudioHandler.get_mapping_dict()['Categorical'] for k,v in element.items()
 		}
 
@@ -346,42 +344,52 @@ class PPO:
 				'current_spectrogram': (rollout_batch_size, *spectrogram_shape),
 				'current_params': (rollout_batch_size, n_params),
 				'steps_remaining': (rollout_batch_size, 1)
+		
+		Returns:
+			dict of tensors of actions for disc/cont params
+			dict of tensors of log probs of actions
 		"""
-		action_logits = self.actor(states)
+		cont_action_logits, disc_action_logits = self.actor(states)
 
-		if action_logits.dim() > 1:
+		if cont_action_logits.dim() > 1:
 			cov_mat = torch.stack(
-				[ppo_model.cov_mat for _ in range(action_logits.shape[0])], 
+				[ppo_model.cov_mat for _ in range(cont_action_logits.shape[0])], 
 				dim=0
 			)
 		else:
 			cov_mat = self.cov_mat
-		output_actions = torch.zeros_like(action_logits)
 
 		# Sample actions from multivariate normal distribution for 
 		# continuous params
-		cont_logits = action_logits[:, self.cont_logit_indices]
-		cont_means = self.continuous_activation(cont_logits)
+		cont_means = self.continuous_activation(cont_action_logits)
 		dist = MultivariateNormal(cont_means, cov_mat)
 		cont_actions = self.continuous_activation(dist.sample())
 		cont_log_probs = dist.log_prob(cont_actions)
 
-		output_actions[:, self.cont_param_indices] = cont_actions
-
-		total_log_probs = cont_log_probs
-
 		# Sample actions from categorical distributions for discrete params
-		for dexed_idx, log_idx in self.desc_params_dict.items():
-			logits = action_logits[:, log_idx]
+		disc_actions = torch.zeros_like(disc_action_logits)
+		disc_log_probs = torch.zeros(disc_action_logits.shape[0])
+
+		for dexed_idx, log_idx in self.disc_params_dict.items():
+			logits = disc_action_logits[:, log_idx]
 			dist = Categorical(logits=logits)
 
 			action_inds = dist.sample()
-			total_log_probs += dist.log_prob(action_inds)
+			disc_log_probs += dist.log_prob(action_inds)
 
 			one_hot_actions = F.one_hot(action_inds, num_classes=len(log_idx))
-			output_actions[:, log_idx] = one_hot_actions.float()
+			disc_actions[:, log_idx] = one_hot_actions.float()
   
-		return output_actions.detach(), total_log_probs.detach()
+		return (
+			{
+				'cont_actions': cont_actions.detach(), 
+				'disc_actions': disc_actions.detach(), 
+			},
+			{
+				'cont_log_probs': cont_log_probs.detach(),
+				'disc_log_probs': disc_log_probs.detach(),
+			}
+		)
 
 	def compute_rtgs(self, batch_rewards):
 		"""Compute rewards-to-go
@@ -504,18 +512,20 @@ class PPO:
 							Shape: (number of timesteps in batch, dimension of action)
 			Return:
 				V - the predicted values of batch_obs
-				log_probs - the log probabilities of the actions taken in batch_acts given batch_obs
+				log_probs - dict of the log probabilities of the actions taken 
+					in batch_acts given batch_obs for continuous and
+					discrete options
 		"""
 		# Query critic network for a value V for each batch_obs. Shape of V should be same as batch_rtgs
 		V = self.critic(batch_obs) #.squeeze()
 
 		# Calculate the log probabilities of batch actions using most recent actor network.
 		# This segment of code is similar to that in get_action()
-		action_logits = self.actor(batch_obs)
+		cont_action_logits, disc_action_logits = self.actor(batch_obs)
 
-		if action_logits.dim() > 1:
+		if cont_action_logits.dim() > 1:
 			cov_mat = torch.stack(
-				[ppo_model.cov_mat for _ in range(action_logits.shape[0])], 
+				[ppo_model.cov_mat for _ in range(cont_action_logits.shape[0])], 
 				dim=0
 			)
 		else:
@@ -523,21 +533,21 @@ class PPO:
 
 		# Sample actions from multivariate normal distribution for 
 		# continuous params
-		cont_means = self.continuous_activation(
-			action_logits[:, self.cont_logit_indices]
-		)
+		cont_means = self.continuous_activation(cont_action_logits)
 		dist = MultivariateNormal(cont_means, cov_mat)
-		log_probs = dist.log_prob(batch_acts[:, self.cont_param_indices])
+		cont_log_probs = dist.log_prob(batch_acts['cont_actions'])
 
 		# for discrete
-		for dexed_idx, log_idx in self.desc_params_dict.items():
-			logits = action_logits[:, log_idx]
+		disc_log_probs = torch.zeros(disc_action_logits.shape[0])
+
+		for dexed_idx, log_idx in self.disc_params_dict.items():
+			logits = disc_action_logits[:, log_idx]
 			dist = Categorical(logits=logits)
-			log_probs += dist.log_prob(action_logits[:, log_idx].argmax(1))
+			disc_log_probs += dist.log_prob(batch_acts['disc_actions'][:, log_idx].argmax(1))
 
 		# Return the value vector V of each observation in the batch
 		# and log probabilities log_probs of each action in the batch
-		return V, log_probs
+		return V, {'cont_log_probs': cont_log_probs, 'disc_log_probs': disc_log_probs}
 
 
 if __name__ == '__main__':
@@ -582,7 +592,7 @@ if __name__ == '__main__':
 			416 + n_params + 1, 300, hidden_size=350
 		),
 		continuous_head=BasicActorHead(300, len(mapping_dict['Numerical'])),
-		descrete_head=BasicActorHead(300, 
+		discrete_head=BasicActorHead(300, 
 			sum([len(*p.values()) for p in mapping_dict['Categorical']])
 		)
 	)
@@ -609,11 +619,11 @@ if __name__ == '__main__':
 	print(n_trainable_params(critic))
 
 	# Initialize the PPO object
-	ppo_model = PPO(actor, critic, 120)
+	ppo_model = PPO(actor, critic)
 
-	# get actions and eval test
-	acts, log_probs = ppo_model.get_actions(test_state_batch)
-	v, lp = ppo_model.evaluate(test_state_batch, acts)
+	# Test get actions and eval
+	actions, probs = ppo_model.get_actions(test_state_batch)
+	V, lp = ppo_model.evaluate(test_state_batch, actions)
 
 
 	# Training loop
