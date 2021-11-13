@@ -115,8 +115,24 @@ class PresetActivation(nn.Module):
 			x = self.numerical_act(x)
 		return x
 
+
+class IntermediateLayers(nn.Module):
+	def __init__(self, input_size, output_size, hidden_size=400,
+			dropout=0.2):
+		super().__init__()
+		self.fc1 = nn.Linear(input_size, hidden_size)
+		self.act1 = nn.ReLU()
+		self.dropout1 = nn.Dropout(dropout)
+		self.fc2 = nn.Linear(hidden_size, output_size)
+		self.act2 = nn.ReLU()
+		self.dropout2 = nn.Dropout(dropout)
+
+	def forward(self, x):
+		x = self.dropout1(self.act1(self.fc1(x)))
+		return self.dropout2(self.act2(self.fc2(x)))
+
 class BasicActorHead(nn.Module):
-	def __init__(self, input_size, output_size, hidden_sizes=[256,64],
+	def __init__(self, input_size, output_size, hidden_sizes=[256,256],
 			dropout=0.2):
 		super().__init__()
 		self.fc1 = nn.Linear(input_size, hidden_sizes[0])
@@ -126,12 +142,12 @@ class BasicActorHead(nn.Module):
 		self.act2 = nn.ReLU()
 		self.dropout2 = nn.Dropout(dropout)
 		self.fc3 = nn.Linear(hidden_sizes[1], output_size)
-		self.activation = PresetActivation()
+		# the PresetActivation should not go here
 
 	def forward(self, x):
 		x = self.dropout1(self.act1(self.fc1(x)))
 		x = self.dropout2(self.act2(self.fc2(x)))
-		return self.activation(self.fc3(x))
+		return self.fc3(x)
 
 
 class BasicCriticHead(nn.Module):
@@ -165,7 +181,7 @@ class ComparerNetwork(nn.Module):
 		return self.comparer_net(x)
 
 
-class PolicyModel(nn.Module):
+class ValueModel(nn.Module):
 	"""Models which input state and output an action or value based
 	on provided sound_comparer and decision_head.
 	"""
@@ -181,6 +197,26 @@ class PolicyModel(nn.Module):
 			dim=-1
 		)
 		return self.decision_head(comb_emb)
+
+	
+class ActorModel(nn.Module):
+	""" Hybrid actor model """
+	def __init__(self, sound_comparer, intermediate_layers, continuous_head,
+			descrete_head):
+		super().__init__()
+		self.sound_comparer = sound_comparer
+		self.intermediate_layers = intermediate_layers
+		self.continuous_head = continuous_head
+		self.descrete_head = descrete_head
+
+	def forward(self, state):
+		sound_dif_emb = self.sound_comparer(state)
+		comb_emb = torch.cat(
+			[sound_dif_emb, state['current_params'], state['steps_remaining']], 
+			dim=-1
+		)
+		x = self.intermediate_layers(comb_emb)
+		return self.continuous_head(x), self.descrete_head(x)
 
 
 def n_trainable_params(model):
@@ -256,7 +292,7 @@ class PPO:
 					'current_spectrogram': (rollout_batch_size, *spectrogram_shape),
 					'current_params': (rollout_batch_size, n_params),
 					'steps_remaining': (rollout_batch_size, 1)
-     
+	 
 		actions: a batched tensor of shape: (rollout_batch_size, n_params)
   
 		Returns:
@@ -277,7 +313,7 @@ class PPO:
    		}
 		
 		# batched tensor of shape: (rollout_batch_size, 1)
-  		rewards = []
+		rewards = []
 		
 		for i in range(len(states)):
 			# Convert learnable param to synthesizer param
@@ -310,7 +346,7 @@ class PPO:
 				'current_spectrogram': (rollout_batch_size, *spectrogram_shape),
 				'current_params': (rollout_batch_size, n_params),
 				'steps_remaining': (rollout_batch_size, 1)
-    	"""
+		"""
 		action_logits = self.actor(states)
 
 		if action_logits.dim() > 1:
@@ -369,15 +405,15 @@ class PPO:
 	def rollout(self, init_states, n_steps):
 		""" 
   		Do rollouts and return whats returned in other imp 
-    
+	
 		init_states:	a dict of batched tensors that has the following fields:
 				'target_spectrogram': (rollout_batch_size, *spectrogram_shape),
 				'current_spectrogram': (rollout_batch_size, *spectrogram_shape),
 				'current_params': (rollout_batch_size, n_params),
 				'steps_remaining': (rollout_batch_size, 1)
-    
+	
 		n_steps:		int for number of steps to run per episode
-    	"""
+		"""
 
 		# Data on rolled-out batch which will be returned
   
@@ -388,11 +424,11 @@ class PPO:
 		# 'current_params': (rollout_batch_size, num_steps_per_episode, n_params),
 		# 'steps_remaining': (rollout_batch_size, num_steps_per_episode, 1)
 		batch_obs = {
-      		"target_spectrogram" : [],
+	  		"target_spectrogram" : [],
 			"current_spectrogram" : [],
 			"current_params" : [],
 			"steps_remaining" : [],
-        }
+		}
 
 		batch_acts = [] # batched tensor: (rollout_batch_size, num_steps_per_episode, num_action_dims)
 		batch_log_probs = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
@@ -423,7 +459,7 @@ class PPO:
 			batch_rews.append(rews)
 
 		### Correctly reshape all aggregated tensors across all batches & rollouts ###
-    
+	
   		# Reshape batch_obs into following shapes:
 		# 	'target_spectrogram': (rollout_batch_size * num_steps_per_episode, *spectrogram_shape),
 		# 	'current_spectrogram': (rollout_batch_size * num_steps_per_episode, *spectrogram_shape),
@@ -540,15 +576,21 @@ if __name__ == '__main__':
 		feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
 		comparer_net=CNNComparer(n_feat_channels=32*2)
 	)
-	actor = PolicyModel(
+	actor = ActorModel(
 		sound_comparer=actor_comp_net,
-		decision_head=BasicActorHead(416 + n_params + 1, n_params)
+		intermediate_layers=IntermediateLayers(
+			416 + n_params + 1, 300, hidden_size=350
+		),
+		continuous_head=BasicActorHead(300, len(mapping_dict['Numerical'])),
+		descrete_head=BasicActorHead(300, 
+			sum([len(*p.values()) for p in mapping_dict['Categorical']])
+		)
 	)
 	critic_comp_net = ComparerNetwork(
 		feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
 		comparer_net=CNNComparer(n_feat_channels=32*2)
 	)
-	critic = PolicyModel(
+	critic = ValueModel(
 		sound_comparer=critic_comp_net,
 		decision_head=BasicActorHead(416 + n_params + 1, 1)
 	)
@@ -611,7 +653,7 @@ if __name__ == '__main__':
 		batch_acts:				(rollout_batch_size * num_steps_per_episode, num_action_dims)
 		batch_log_probs:		(rollout_batch_size * num_steps_per_episode, 1)
 		batch_rtgs:				(rollout_batch_size * num_steps_per_episode, 1)
-    	"""
+		"""
 		(batch_obs, batch_acts, batch_log_probs, batch_rtgs) = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
 		
 		# Compute advantages and normalize
