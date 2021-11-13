@@ -594,7 +594,7 @@ if __name__ == '__main__':
 		A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
 		# Update actor and critic
-		
+  
 		# TODO: Construct a Dataset object here? 
 		for j in range(n_updates_per_iteration):
 			# Calculate V_phi and pi_theta(a_t | s_t)
