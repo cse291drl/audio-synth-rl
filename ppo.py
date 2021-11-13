@@ -323,22 +323,22 @@ class PPO:
 		
 		for i in range(batch_size):
 			# Convert learnable param to synthesizer param
-			param = presetParam((continuous_actions[i], discrete_actions[i]), learnable=True)
+			param = presetParam((continuous_actions[i].unsqueeze(0), discrete_actions[i].unsqueeze(0)), learnable=True)
 
 			# Get next state
-			predicted_spectrogram = self.audiohandler.generateSpectrogram(param.to_params())
+			predicted_spectrogram = self.audiohandler.generateSpectrogram(param.to_params()[0])
 			pred_states['current_spectrogram'].append(predicted_spectrogram)
-
 			# Generate reward
 			if self.reward_metric == "mae":
-				rew = -self.audiohandler.getMAE(states[i],pred_states[i])
+				rew = -float(self.audiohandler.getMAE(pred_states['target_spectrogram'][i],predicted_spectrogram))
 			else:
 				# sc: lower is better
-				rew = -self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
+				rew = -float(self.audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i],predicted_spectrogram))
 			rewards.append(rew)
    
-		pred_states['current_spectrogram'] = torch.vstack(pred_states['current_spectrogram'])
-		rewards = torch.vstack(rewards).reshape(-1, 1)
+		pred_states['current_spectrogram'] = torch.stack(pred_states['current_spectrogram'])
+		# print(f"pred_state {pred_states['current_spectrogram'].shape}")
+		rewards = torch.tensor(rewards).reshape(-1, 1)
 
 		return pred_states, rewards
 	
@@ -447,7 +447,7 @@ class PPO:
 		}
 
 		batch_continuous_acts = [] # batched tensor: (rollout_batch_size, num_steps_per_episode, num_continuous_actions)
-  		batch_discrete_acts = [] # batched tensor: (rollout_batch_size, num_steps_per_episode, num_discrete_actions)
+		batch_discrete_acts = [] # batched tensor: (rollout_batch_size, num_steps_per_episode, num_discrete_actions)
 		batch_continuous_log_probs = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
 		batch_discrete_log_probs = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
 		batch_rews = [] # batched tensor: (rollout_batch_size, num_steps_per_episode)
@@ -455,7 +455,7 @@ class PPO:
 		obs = init_states
 
 		# Step through episode from each initial state in parallel
-		for i in range(n_steps):
+		for i in tqdm(range(n_steps)):
 			# Add current state info (obs) to batch_obs
 			for k,v in obs.items():
 				batch_obs[k].append(v)
@@ -470,15 +470,14 @@ class PPO:
 			# 			with the tensors having the SAME shape as the tensors in init_states
 			#	rews: (rollout_batch_size, 1)
 			# TODO: Ensure that the variables below match their expected shapes listed above
+			# print(obs['current_spectrogram'].shape)
 			actions, _log_probs = self.get_actions(obs)   
 			continuous_actions = actions['cont_actions']
 			discrete_actions = actions['disc_actions']
    
 			continuous_log_probs = _log_probs['cont_log_probs']
 			discrete_log_probs = _log_probs['disc_log_probs']
-			   
 			obs, rews = self.step(obs, continuous_actions=continuous_actions, discrete_actions=discrete_actions)
-
 			# Update continuous/discrete actions, continuous/discrete action log probs, and rewards
 			batch_continuous_acts.append(continuous_actions)
 			batch_discrete_acts.append(discrete_actions)
@@ -497,28 +496,43 @@ class PPO:
 		# Note:
 		# vstack will return tensors whose shape starts with: (num_steps_per_episode, rollout_batch_size,...)
 		# so, .transpose(0,1) will make the tensors' shapes start with: (rollout_batch_size, num_steps_per_episode)
-		batch_obs['target_spectrogram'] = torch.vstack(batch_obs['target_spectrogram']).transpose(0,1).view(-1, *batch_obs['target_spectrogram'].shape[2:])
-		batch_obs['current_spectrogram'] = torch.vstack(batch_obs['current_spectrogram']).transpose(0,1).view(-1, *batch_obs['current_spectrogram'].shape[2:])
-		batch_obs['current_params'] = torch.vstack(batch_obs['current_params']).transpose(0,1).view(-1, *batch_obs['current_params'].shape[2:])
-		batch_obs['steps_remaining'] = torch.vstack(batch_obs['steps_remaining']).transpose(0,1).view(-1, *batch_obs['steps_remaining'].shape[2:])
-   
+		batch_obs['target_spectrogram'] = torch.stack(batch_obs['target_spectrogram']).transpose(0,1)
+		batch_obs['target_spectrogram'] = batch_obs['target_spectrogram'].reshape(-1, *batch_obs['target_spectrogram'].shape[2:])
+		batch_obs['current_spectrogram'] = torch.stack(batch_obs['current_spectrogram']).transpose(0,1)
+		batch_obs['current_spectrogram'] = batch_obs['current_spectrogram'].reshape(-1, *batch_obs['current_spectrogram'].shape[2:])
+		batch_obs['current_params'] = torch.stack(batch_obs['current_params']).transpose(0,1)
+		batch_obs['current_params'] = batch_obs['current_params'].reshape(-1, *batch_obs['current_params'].shape[2:])
+		# print(f"cur params {batch_obs['current_params'].shape}")		
+		batch_obs['steps_remaining'] = torch.stack(batch_obs['steps_remaining']).transpose(0,1)
+		batch_obs['steps_remaining'] = batch_obs['steps_remaining'].reshape(-1, *batch_obs['steps_remaining'].shape[2:])
+		# print(f"steps remaining {batch_obs['steps_remaining'].shape}")	
+
 		# Reshape batch_acts into: (rollout_batch_size * num_steps_per_episode, n_params)
-		batch_continuous_acts = torch.vstack(batch_continuous_acts).transpose(0,1).view(-1, *batch_continuous_acts.shape[2:])
-		batch_discrete_acts = torch.vstack(batch_discrete_acts).transpose(0,1).view(-1, *batch_discrete_acts.shape[2:])
-  
+		batch_continuous_acts = torch.stack(batch_continuous_acts).transpose(0,1)
+		batch_continuous_acts = batch_continuous_acts.reshape(-1, *batch_continuous_acts.shape[2:])
+		# print(f"batch_continuous_acts {batch_continuous_acts.shape}")	
+		batch_discrete_acts = torch.stack(batch_discrete_acts).transpose(0,1)
+		batch_discrete_acts = batch_discrete_acts.reshape(-1, *batch_discrete_acts.shape[2:])
+		# print(f"batch_discrete_acts {batch_discrete_acts.shape}")	
+
 		# Reshape batch_log_probs into (rollout_batch_size * num_steps_per_episode, 1)
-		batch_continuous_log_probs = torch.vstack(batch_continuous_log_probs).transpose(0,1).view(-1,1)
-		batch_discrete_log_probs = torch.vstack(batch_discrete_log_probs).transpose(0,1).view(-1,1)
+		batch_continuous_log_probs = torch.stack(batch_continuous_log_probs).transpose(0,1)
+		batch_continuous_log_probs = batch_continuous_log_probs.reshape(-1,1)
+		# print(f"batch_continuous_log_probs {batch_continuous_log_probs.shape}")	
+		batch_discrete_log_probs = torch.stack(batch_discrete_log_probs).transpose(0,1)
+		batch_discrete_log_probs = batch_discrete_log_probs.reshape(-1,1)
+		# print(f"batch_discrete_log_probs {batch_discrete_log_probs.shape}")	
   
 		# First, reshape batch_rews into (rollout_batch_size, num_steps_per_episode)
-		batch_rews = torch.vstack(batch_rews).transpose(0,1)
-  
+		batch_rews = torch.stack(batch_rews).transpose(0,1).squeeze(-1)
+		# print(f"batch_rews {batch_rews.shape}")	
 		# Compute returns to go using batch_rews: shape: (rollout_batch_size, num_steps_per_episode)
 		# Also reshape batch_rtgs from (rollout_batch_size, num_steps_per_episode) into (rollout_batch_size*num_steps_per_episode,1)
-		batch_rtgs = self.compute_rtgs(batch_rews).transpose(0,1).view(-1,1)
-  
+		batch_rtgs = self.compute_rtgs(batch_rews).transpose(0,1).reshape(-1,1)
+		# print(f"batch_rtgs {batch_rtgs.shape}")	
 		# Finally, reshape batch_rews into (rollout_batch_size*num_steps_per_episode,1)
-		batch_rews = batch_rews.view(-1, 1)
+		batch_rews = batch_rews.reshape(-1, 1)
+		# print(f"batch_rews22222 {batch_rews.shape}")	
   
 		return batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs
 
@@ -576,8 +590,8 @@ if __name__ == '__main__':
 	__spec__ = None
 
 	# hyperparameters
-	steps_per_episode = 25
-	rollout_batch_size = 32
+	steps_per_episode = 2 # 25
+	rollout_batch_size = 2 # 32
 	num_train_iter = 100
 	n_updates_per_iteration = 5	 # Number of times to update actor/critic per iteration
 
@@ -687,19 +701,21 @@ if __name__ == '__main__':
 		batch_rtgs:				(rollout_batch_size * num_steps_per_episode, 1)
 		"""
 		batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
-		
+
 		# Compute advantages and normalize
 		V, _ = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
+
 		A_k = batch_rtgs - V.detach()
+
 		A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
 		# Update actor and critic
 
 		# TODO: Construct a Dataset object here?
-		for j in range(n_updates_per_iteration):
+		for j in tqdm(range(n_updates_per_iteration)):
 			# Calculate V_phi and pi_theta(a_t | s_t)
 			V, curr_log_probs = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
-   
+
 			## Backprop w.r.t continuous log probs
 
 			# Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
@@ -711,13 +727,11 @@ if __name__ == '__main__':
 			# TL;DR makes gradient ascent easier behind the scenes.
 			ratios_cont = torch.exp(curr_log_probs['cont_log_probs'] - batch_continuous_log_probs)
 			ratios_disc = torch.exp(curr_log_probs['disc_log_probs'] - batch_discrete_log_probs)
-   
 			# Calculate surrogate losses.
 			surr1_cont = ratios_cont * A_k
 			surr2_cont = torch.clamp(ratios_cont, 1 - ppo_model.clip, 1 + ppo_model.clip) * A_k
 			surr1_disc = ratios_disc * A_k
 			surr2_disc = torch.clamp(ratios_disc, 1 - ppo_model.clip, 1 + ppo_model.clip) * A_k
-
 			# Calculate actor and critic losses.
 			# NOTE: we take the negative min of the surrogate losses because we're trying to maximize
 			# the performance function, but Adam minimizes the loss. So minimizing the negative
@@ -726,6 +740,7 @@ if __name__ == '__main__':
 			actor_loss = (-torch.min(surr1_cont, surr2_cont)).mean() + (-torch.min(surr1_disc, surr2_disc)).mean()
 			critic_loss = nn.MSELoss()(V, batch_rtgs)
 
+			print(f"Actor loss: {actor_loss.item()}, Critic loss: {critic_loss.item()}")
 			# Calculate gradients and perform backward propagation for actor network
 			ppo_model.actor_optim.zero_grad()
 			actor_loss.backward(retain_graph=True)
