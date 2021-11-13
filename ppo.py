@@ -325,7 +325,8 @@ class PPO:
 		# Sample actions from multivariate normal distribution for 
 		# continuous params
 		cont_logits = action_logits[:, self.cont_logit_indices]
-		dist = MultivariateNormal(cont_logits, cov_mat)
+		cont_means = self.continuous_activation(cont_logits)
+		dist = MultivariateNormal(cont_means, cov_mat)
 		cont_actions = self.continuous_activation(dist.sample())
 		cont_log_probs = dist.log_prob(cont_actions)
 
@@ -474,9 +475,29 @@ class PPO:
 
 		# Calculate the log probabilities of batch actions using most recent actor network.
 		# This segment of code is similar to that in get_action()
-		mean = self.actor(batch_obs)
-		dist = MultivariateNormal(mean, self.cov_mat)
-		log_probs = dist.log_prob(batch_acts)
+		action_logits = self.actor(batch_obs)
+
+		if action_logits.dim() > 1:
+			cov_mat = torch.stack(
+				[ppo_model.cov_mat for _ in range(action_logits.shape[0])], 
+				dim=0
+			)
+		else:
+			cov_mat = self.cov_mat
+
+		# Sample actions from multivariate normal distribution for 
+		# continuous params
+		cont_means = self.continuous_activation(
+			action_logits[:, self.cont_logit_indices]
+		)
+		dist = MultivariateNormal(cont_means, cov_mat)
+		log_probs = dist.log_prob(batch_acts[:, self.cont_param_indices])
+
+		# for descrete
+		for dexed_idx, log_idx in self.desc_params_dict.items():
+			logits = action_logits[:, log_idx]
+			dist = Categorical(logits=logits)
+			log_probs += dist.log_prob(action_logits[:, log_idx].argmax(1))
 
 		# Return the value vector V of each observation in the batch
 		# and log probabilities log_probs of each action in the batch
@@ -547,6 +568,11 @@ if __name__ == '__main__':
 
 	# Initialize the PPO object
 	ppo_model = PPO(actor, critic, 120)
+
+	# get actions and eval test
+	acts, log_probs = ppo_model.get_actions(test_state_batch)
+	v, lp = ppo_model.evaluate(test_state_batch, acts)
+
 
 	# Training loop
 	target_iterator = iter(target_sound_loader)
