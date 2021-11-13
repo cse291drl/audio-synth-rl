@@ -145,6 +145,9 @@ class presetParam():
     and the numpy array which is required for plugging into the synthesizer
     '''
     def __init__(self, params, param_length = 155, learnable = False, device = 'cpu'):
+        '''
+        Params: either tuple of tensors if learnable
+        '''
         self.params = params
         if isinstance(params, tuple):
             self._batch_size = self.params[0].shape[0]
@@ -173,6 +176,9 @@ class presetParam():
             pass
         
     def to_learnable(self):
+        '''
+        Returns a tuple (numerical_tensor, categorical_tensor)
+        '''
         # Pre-allocation of learnable tensor
         if self.learnable:
             return self.params
@@ -210,6 +216,9 @@ class presetParam():
             return (num_tensor, cat_tensor)
         
     def to_params(self, sample = False): # returns numpy
+        '''
+        Returns synthsizer params (one numpy array)
+        '''
         if self.learnable:
             param_tensor = torch.empty((self._batch_size,self.preset_length),device=self.device, requires_grad=False)
             learn_indexes = 0 # For debug
