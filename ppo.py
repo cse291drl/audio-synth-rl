@@ -13,6 +13,8 @@ from data_modules.data_modules import AudioHandler, TargetSoundDataset
 from loss import presetParam
 from synth.dexed import Dexed
 
+import dask
+
 class CNNFeatExtractor(nn.Module):
 	"""CNN for extracting feats from sound spectrograms or stacked 
 	spectrograms if used in ComparerNetwork. 
@@ -223,7 +225,7 @@ def n_trainable_params(model):
 
 class PPO:
 	def __init__(self, actor, critic, actor_lr=1e-3, critic_lr=1e-3, gamma=0.9,
-			cov_matrix_val=.01, clip = 0.2, reward_metric = "mae"):
+			cov_matrix_val=.01, clip = 0.2, reward_metric = "mae", use_multiprocessing = True):
 		super().__init__()
 		self.actor = actor
 		self.critic = critic
@@ -234,6 +236,8 @@ class PPO:
 		self.cov_matrix_val = cov_matrix_val
 		self.audiohandler = AudioHandler()
 		self.continuous_activation = nn.Hardtanh(min_val=0.0, max_val=1.0)
+  
+		self.use_multiprocessing = use_multiprocessing
   
 		assert reward_metric in ("mae", "sc")
 		self.reward_metric = reward_metric
@@ -320,21 +324,52 @@ class PPO:
 		
 		# batched tensor of shape: (rollout_batch_size, 1)
 		rewards = []
-		
-		for i in range(batch_size):
+  
+		# Multiprocessing approach to generating the spectrogram for all samples in the batch
+		jobs = []
+		def get_next_state_and_reward_job(i, audiohandler, pred_states, continuous_actions, discrete_actions, reward_metric):
 			# Convert learnable param to synthesizer param
 			param = presetParam((continuous_actions[i].unsqueeze(0), discrete_actions[i].unsqueeze(0)), learnable=True)
 
 			# Get next state
-			predicted_spectrogram = self.audiohandler.generateSpectrogram(param.to_params()[0])
-			pred_states['current_spectrogram'].append(predicted_spectrogram)
+			predicted_spectrogram = audiohandler.generateSpectrogram(param.to_params()[0])
+
 			# Generate reward
-			if self.reward_metric == "mae":
-				rew = -float(self.audiohandler.getMAE(pred_states['target_spectrogram'][i],predicted_spectrogram))
+			if reward_metric == "mae":
+				rew = -float(audiohandler.getMAE(pred_states['target_spectrogram'][i],predicted_spectrogram))
 			else:
 				# sc: lower is better
-				rew = -float(self.audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i],predicted_spectrogram))
-			rewards.append(rew)
+				rew = -float(audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i],predicted_spectrogram))
+			return predicted_spectrogram, rew
+		
+		for i in range(batch_size):
+			if self.use_multiprocessing:
+				jobs.append(dask.delayed(get_next_state_and_reward_job)(i, 
+                                                            self.audiohandler, 
+                                                            pred_states, 
+                                                            continuous_actions, 
+                                                            discrete_actions, 
+                                                            self.reward_metric))
+			else:
+				# Convert learnable param to synthesizer param
+				param = presetParam((continuous_actions[i].unsqueeze(0), discrete_actions[i].unsqueeze(0)), learnable=True)
+
+				# Get next state
+				predicted_spectrogram = self.audiohandler.generateSpectrogram(param.to_params()[0])
+				pred_states['current_spectrogram'].append(predicted_spectrogram)
+				# Generate reward
+				if self.reward_metric == "mae":
+					rew = -float(self.audiohandler.getMAE(pred_states['target_spectrogram'][i],predicted_spectrogram))
+				else:
+					# sc: lower is better
+					rew = -float(self.audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i],predicted_spectrogram))
+				rewards.append(rew)
+    
+		if self.use_multiprocessing:
+			job_results = dask.compute(*jobs, scheduler="processes")
+			for predicted_spectrogram, rew in job_results:
+				pred_states['current_spectrogram'].append(predicted_spectrogram)
+				rewards.append(rew)
    
 		pred_states['current_spectrogram'] = torch.stack(pred_states['current_spectrogram'])
 		# print(f"pred_state {pred_states['current_spectrogram'].shape}")
