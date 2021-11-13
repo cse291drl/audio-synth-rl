@@ -225,13 +225,14 @@ def n_trainable_params(model):
 
 class PPO:
 	def __init__(self, actor, critic, actor_lr=1e-3, critic_lr=1e-3, gamma=0.9,
-			cov_matrix_val=.01, reward_metric = "mae"):
+			cov_matrix_val=.01, clip = 0.2, reward_metric = "mae"):
 		super().__init__()
 		self.actor = actor
 		self.critic = critic
 		self.actor_lr = actor_lr
 		self.critic_lr = critic_lr
 		self.gamma = gamma
+		self.clip = clip
 		self.cov_matrix_val = cov_matrix_val
 		self.audiohandler = AudioHandler()
 		self.continuous_activation = nn.Hardtanh(min_val=0.0, max_val=1.0)
@@ -612,7 +613,7 @@ if __name__ == '__main__':
 		'steps_remaining': torch.randint(0, steps_per_episode, (rollout_batch_size, 1))
 	}
 
-	r_a = actor(test_state_batch)
+	r_a_cont, r_a_disc = actor(test_state_batch)
 	r_c = critic(test_state_batch)
 
 	print(n_trainable_params(actor))
@@ -685,11 +686,16 @@ if __name__ == '__main__':
 			# here's a great explanation: 
 			# https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
 			# TL;DR makes gradient ascent easier behind the scenes.
-			ratios = torch.exp(curr_log_probs - batch_log_probs)
+			ratios_cont = torch.exp(curr_log_probs['cont_log_probs'] - batch_continuous_log_probs)
+			ratios_disc = torch.exp(curr_log_probs['disc_log_probs'] - batch_discrete_log_probs)
    
 			# Calculate surrogate losses.
-			surr1 = ratios * A_k
-			surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * A_k
+			surr1_cont = ratios_cont * A_k
+			surr2_cont = torch.clamp(ratios_cont, 1 - ppo_model.clip, 1 + ppo_model.clip) * A_k
+			surr1_disc = ratios_disc * A_k
+			surr2_disc = torch.clamp(ratios_disc, 1 - ppo_model.clip, 1 + ppo_model.clip) * A_k
+
+
 
 			# Calculate actor and critic losses.
 			# NOTE: we take the negative min of the surrogate losses because we're trying to maximize
@@ -699,11 +705,11 @@ if __name__ == '__main__':
 			critic_loss = nn.MSELoss()(V, batch_rtgs)
 
 			# Calculate gradients and perform backward propagation for actor network
-			self.actor_optim.zero_grad()
+			ppo_model.actor_optim.zero_grad()
 			actor_loss.backward(retain_graph=True)
-			self.actor_optim.step()
+			ppo_model.actor_optim.step()
 
 			# Calculate gradients and perform backward propagation for critic network
-			self.critic_optim.zero_grad()
+			ppo_model.critic_optim.zero_grad()
 			critic_loss.backward()
-			self.critic_optim.step()
+			ppo_model.critic_optim.step()
