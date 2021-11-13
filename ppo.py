@@ -218,10 +218,8 @@ class ActorModel(nn.Module):
 		x = self.intermediate_layers(comb_emb)
 		return self.continuous_head(x), self.discrete_head(x)
 
-
 def n_trainable_params(model):
 	return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 
 class PPO:
 	def __init__(self, actor, critic, actor_lr=1e-3, critic_lr=1e-3, gamma=0.9,
@@ -281,7 +279,7 @@ class PPO:
 
 		return ret_states
 
-	def step(self, states, actions):
+	def step(self, states, continuous_actions, discrete_actions):
 		"""	
   		Performs actions in parallel for batch
 
@@ -291,7 +289,9 @@ class PPO:
 					'current_params': (rollout_batch_size, n_params),
 					'steps_remaining': (rollout_batch_size, 1)
 	 
-		actions: a batched tensor of shape: (rollout_batch_size, n_params)
+		continuous_actions: a batched tensor of shape: (rollout_batch_size, num_continuous_action_dims)
+		discrete_actions: a batched tensor of shape: (rollout_batch_size, num_discrete_actions_dims)
+  
   
 		Returns:
 			Tuple of:
@@ -302,7 +302,10 @@ class PPO:
 								'steps_remaining': (rollout_batch_size, 1)
 				rewards:	(rollout_batch_size, 1)
 		"""
-		batch_size = actions.size[0]
+		# (rollout_batch_size, num_continuous_action_dims + num_discrete_actions_dims)
+		actions = torch.hstack((continuous_actions, discrete_actions))
+		batch_size = actions.size(0)
+  
 		pred_states = {
 			"target_spectrogram" : states['target_spectrogram'], 
 			"current_spectrogram" : [],
@@ -313,7 +316,7 @@ class PPO:
 		# batched tensor of shape: (rollout_batch_size, 1)
 		rewards = []
 		
-		for i in range(len(states)):
+		for i in range(batch_size):
 			# Convert learnable param to synthesizer param
 			param = presetParam(actions[i], learnable=True)
 
@@ -325,8 +328,8 @@ class PPO:
 			if self.reward_metric == "mae":
 				rew = -self.audiohandler.getMAE(states[i],pred_states[i])
 			else:
-				# TODO: how does sc behave? is a higher sc a better/higher reward?
-				rew = self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
+				# sc: lower is better
+				rew = -self.audiohandler.getSpectralConvergence(states[i],pred_states[i])
 			rewards.append(rew)
    
 		pred_states['current_spectrogram'] = torch.vstack(pred_states['current_spectrogram'])
@@ -677,6 +680,9 @@ if __name__ == '__main__':
 		for j in range(n_updates_per_iteration):
 			# Calculate V_phi and pi_theta(a_t | s_t)
 			V, curr_log_probs = ppo_model.evaluate(batch_obs, batch_acts)
+   
+   
+			## Backprop w.r.t continuous log probs
 
 			# Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
 			# NOTE: we just subtract the logs, which is the same as
@@ -685,7 +691,7 @@ if __name__ == '__main__':
 			# here's a great explanation: 
 			# https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
 			# TL;DR makes gradient ascent easier behind the scenes.
-			ratios = torch.exp(curr_log_probs - batch_log_probs)
+			ratios = torch.exp(curr_log_probs['cont_log_probs'] - batch_log_probs)
    
 			# Calculate surrogate losses.
 			surr1 = ratios * A_k
