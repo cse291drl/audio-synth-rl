@@ -491,7 +491,7 @@ class PPO:
 		obs = init_states
 
 		# Step through episode from each initial state in parallel
-		for i in range(n_steps):
+		for i in tqdm(range(n_steps)):
 			# Add current state info (obs) to batch_obs
 			for k,v in obs.items():
 				batch_obs[k].append(v)
@@ -628,13 +628,14 @@ class PPO:
 
 if __name__ == '__main__':
 	__spec__ = None
- 
- 	CHECKPOINT_PATH = None # TODO: Insert checkpoint here
+	# checkpointed_models\fca43935-4870-4f92-ac3f-1882454e2e0d\model_training_iteration_20.pt
+	# checkpointed_models\\fca43935-4870-4f92-ac3f-1882454e2e0d\model_training_iteration_10.pt
+	CHECKPOINT_PATH = os.path.realpath("checkpointed_models\\fca43935-4870-4f92-ac3f-1882454e2e0d\model_training_iteration_60.pt") # TODO: Insert checkpoint here
 	SPLIT = "test"
 	
 	# hyperparameters
-	steps_per_episode = 2 # 25
-	rollout_batch_size = 16 # 32
+	steps_per_episode = 10 # 25
+	rollout_batch_size = 1 #16 # 32
 	num_train_iter = 100
 	n_updates_per_iteration = 5	 # Number of times to update actor/critic per iteration
 	use_multiprocessing_for_spectrogram_metrics = True
@@ -654,7 +655,7 @@ if __name__ == '__main__':
 		dataset=dataset,
 		batch_size=rollout_batch_size,
 		num_workers=4,
-		shuffle=True,
+		shuffle=False,
 		persistent_workers=True
 	)
 
@@ -682,7 +683,7 @@ if __name__ == '__main__':
 	)
 	actor.load_state_dict(ckpt_state_dict['ppo_actor_model_state_dict'])
 	actor.eval()
- 
+	
 	critic_comp_net = ComparerNetwork(
 		feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
 		comparer_net=CNNComparer(n_feat_channels=32*2)
@@ -723,7 +724,7 @@ if __name__ == '__main__':
  
 	all_surr1_cont = []
 	all_surr2_cont = []
- 	all_surr1_disc = []
+	all_surr1_disc = []
 	all_surr2_disc = []
  
 	all_Vs = []
@@ -764,8 +765,13 @@ if __name__ == '__main__':
 			batch_log_probs:		(rollout_batch_size * num_steps_per_episode, 1)
 			batch_rtgs:				(rollout_batch_size * num_steps_per_episode, 1)
 			"""
+			print('prerollout')
 			batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
-
+			print('postrollout')
+			if batch_idx <= 2:
+				#batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram
+				os.makedirs('audio_samples', exist_ok=True)
+				torch.save({'target': batch_obs_unrolled_target_spectrogram, 'current': batch_obs_unrolled_current_spectrogram},os.path.join('audio_samples',f"audio_{batch_idx}"))
 			# Log
 			# batch_rews_unrolled: (rollout_batch_size, num_steps_per_episode)
 			discounted_rewards.append(batch_rews_unrolled[:,0])
@@ -783,8 +789,9 @@ if __name__ == '__main__':
 				spec_metric_jobs = []
 				for _target_spectrogram, _predicted_spectrogram in zip(batch_target_specs, batch_last_predicted_specs):
 					spec_metric_jobs.append(dask.delayed(_compute_mae_log_and_sc)(_target_spectrogram, _predicted_spectrogram))
+				print('preprocess')
 				spec_metric_jobs = dask.compute(*spec_metric_jobs, scheduler="processes")
-				
+				print('postprocess')
 				for _mae_log, _sc in spec_metric_jobs:
 					mae_log_vals.append(_mae_log)
 					sc_vals.append(_sc)
