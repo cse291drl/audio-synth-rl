@@ -3,6 +3,8 @@ synth/*.wav
 data/*
 !data/README.md
 
+vae_model/*.tar
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
