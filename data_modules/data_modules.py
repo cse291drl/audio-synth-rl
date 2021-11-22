@@ -110,13 +110,56 @@ class AudioHandler:
 		if return_spec:
 			return audio, self.spectrogram(audio)
 		return audio
+
+	def generateSpectrogram(self, params, return_spec = True ):
+		'''
+		Generates audio given a particular set of parameters, and returns the associated spectrogram with the audio.
+		'''
+		_, spec = self.generateAudio(params, return_spec = True)
+		return spec
 	
-	def getMAE(self, x_wav):
+	def getMAE(self, target_spectrogram, pred_spectrogram):
 		'''
-		Wraps audio.py's audio similarity evaluator
+		Calculates MAE based on STFT
 		'''
-		eval = audio.SimilarityEvaluator(x_wav)
-		return eval.get_mae_log_stft(return_spectrograms=False)
+		target_stft = self.spectrogram.mel_dB_to_STFT(target_spectrogram)
+		pred_stft = self.spectrogram.mel_dB_to_STFT(pred_spectrogram)
+		eps = 1e-4  # -80dB  (un-normalized stfts)
+		log_target_stft = np.log10(np.maximum(target_stft,eps))
+		log_pred_stft = np.log10(np.maximum(pred_stft,eps))
+		mae = np.abs(log_target_stft-log_pred_stft).mean()
+		return mae
+
+	def getSpectralConvergence(self, target_spectrogram,pred_spectrogram):
+		'''
+  		Calculates spectral convergence
+    	'''
+		target_stft = self.spectrogram.mel_dB_to_STFT(target_spectrogram)
+		pred_stft = self.spectrogram.mel_dB_to_STFT(pred_spectrogram)
+		sc = np.linalg.norm(target_stft - pred_stft, ord='fro') / np.linalg.norm(target_stft, ord='fro')
+		return sc
+
+	@staticmethod
+	def get_mapping_dict():
+		numerical_set = set(Dexed.get_numerical_params_indexes_learnable())
+		categorical_set = set(Dexed.get_categorical_params_indexes_learnable())
+		preset_length = 155
+		mapping_dict = {'Numerical':[],'Categorical':[]}
+		learn_idx = 0
+		for vst_idx in range(preset_length):
+			if vst_idx in numerical_set:
+				mapping_dict['Numerical'].append({vst_idx:learn_idx})
+				learn_idx += 1
+		learn_idx = 0
+		for vst_idx in range(preset_length):
+			if vst_idx in categorical_set:
+				n_classes = Dexed.get_param_cardinality(vst_idx)
+				cat_list = []
+				for idx in range(n_classes):
+					cat_list.append(learn_idx)
+					learn_idx += 1
+				mapping_dict['Categorical'].append({vst_idx:cat_list})
+		return mapping_dict  
 
 class TargetSoundDataModule(pl.LightningDataModule):
 	def __init__(self, data_dir, split_file, batch_size = 32, num_workers = 1,

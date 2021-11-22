@@ -499,14 +499,99 @@ class Dexed:
         return indexes
 
     @staticmethod
+    def get_numerical_params_indexes_learnable():
+        indexes = [5,  # feedback (card:8)
+                   7, 8, 9, 10,  # lfo speed, lfo delay (before LFO actually modulates), lfo pm depth, lfo am depth
+                   14, 15, 16, 17, 18, 19, 20, 21, 22]  # transpose, pitch mod sensitivity, pitch EG rates/levels
+        for i in range(6):  # operators
+            for j in [23, 24, 25, 26, 27, 28, 29, 30]:  # rates and levels
+                indexes.append(j + 22*i)
+            indexes.append(31 + 22*i)  # output level
+            indexes.append(33 + 22*i)  # freq coarse
+            indexes.append(34 + 22*i)  # freq fine
+            indexes.append(35 + 22*i)  # detune (these 3 parameters kind of overlap...)
+            indexes.append(36 + 22*i)  # L/R scales breakpoint
+            indexes.append(37 + 22*i)  # L scale depth
+            indexes.append(38 + 22*i)  # R scale depth
+            indexes.append(41 + 22*i)  # rate scaling (card:8)
+            indexes.append(42 + 22*i)  # amplitude mod sensitivity (card:4)
+            indexes.append(43 + 22*i)  # key velocity (card:8)
+        return indexes
+    
+    @staticmethod
     def get_categorical_params_indexes():
         indexes = [4, 6, 11, 12]  # algorithm, osc key sync, lfo key sync, lfo wave
         for i in range(6):  # operators
             indexes.append(32 + 22*i)  # mode (ratio or fixed frequency)
             indexes.append(39 + 22*i)  # L scale
             indexes.append(40 + 22*i)  # R scale
-            indexes.append(44 + 22*i)  # op on/off switch
+            indexes.append(44 + 22*i)  # op on/off switch 
         return indexes
+    
+    @staticmethod
+    def get_categorical_params_indexes_learnable():
+        indexes = [4, 6, 11, 12]  # algorithm, osc key sync, lfo key sync, lfo wave
+        for i in range(6):  # operators
+            indexes.append(32 + 22*i)  # mode (ratio or fixed frequency)
+            indexes.append(39 + 22*i)  # L scale
+            indexes.append(40 + 22*i)  # R scale
+        return indexes
+    
+    # DEPRECATED
+    # @staticmethod
+    # def get_learnable_indexes():
+    #     n_params = 155 # HARDCODED, but will suffice for now
+    #     cat_list = set(Dexed.get_numerical_params_indexes_learnable())
+    #     num_list = set(Dexed.get_categorical_params_indexes_learnable())
+    #     cat_learnable = []
+    #     num_learnable = []
+    #     learn_idx = 0
+    #     for vst_idx in range(n_params):
+    #         if vst_idx in cat_list:
+    #             cat_learnable.append(learn_idx)
+    #             learn_idx += 1
+    #         elif vst_idx in num_list:
+    #             num_learnable.append(learn_idx)
+    #             learn_idx += 1
+    #         else:
+    #             continue
+    #     return num_learnable, cat_learnable
+        
+    # @staticmethod    
+    # def get_useless_learned_params_indexes(self, preset_GT: torch.Tensor):
+    #     """ Returns a tuple of lists of learnable indexes of useless parameters, i.e. learnable parameters which do
+    #     not influence the output sound, and should not be used in a loss function and for backprop.
+    #     For categorical learnable params, only the first cat-output index is returned.
+
+    #     First tuple element is the list of useless numerical learned parameters.
+    #     Second tuple element is the list of useless categorical learned parameters (first cat indexes only).
+
+    #     E.g. when a Dexed Operator has a 0.0 output level, its parameters have no influence on sound and
+    #     might have random values.
+
+    #     :param preset_GT: 1D Tensor of learnable params of a given GT preset from the dataset. """
+    # # operators volumes check.
+    # useless_num_learn_param_indexes = []
+    # useless_cat_learn_param_indexes = []
+    # # OP switch excluded, output level excluded
+    # op_params_base_vst_indexes = [23, 24, 25, 26, 27, 28, 29, 30,
+    #                                 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]
+    # for op_i, vst_volume_idx in enumerate([31 + 22*i for i in range(6)]):
+    #     if isinstance(self.full_to_learnable[vst_volume_idx], int):  # numerical
+    #         if preset_GT[self.full_to_learnable[vst_volume_idx]].item() < 1e-3:  # OP zero-volume?
+    #             # add all operator-related indexes
+    #             cur_op_params_vst_indexes = [idx + op_i*22 for idx in op_params_base_vst_indexes]
+    #             for vst_idx in cur_op_params_vst_indexes:
+    #                 learn_idx = self.full_to_learnable[vst_idx]
+    #                 if isinstance(learn_idx, int):  # num
+    #                     useless_num_learn_param_indexes.append(learn_idx)
+    #                 elif isinstance(learn_idx, list):  # cat: only first cat probability output is appended
+    #                     useless_cat_learn_param_indexes.append(learn_idx[0])
+    #     elif self.full_to_learnable[vst_volume_idx] is None:
+    #         pass
+    #     else:  # TODO If volume is categorical, we must convert....
+    #         raise NotImplementedError("Dexed Operator output volume learned as categorical")
+    # return useless_num_learn_param_indexes, useless_cat_learn_param_indexes
 
     def play_audio(self, audio, blocking=False):
         """ Plays audio through computer. """
@@ -517,6 +602,7 @@ class Dexed:
 
 
 if __name__ == "__main__":
+    
     __spec__ = None
 
     print("Machine: '{}' ({} CPUs)".format(socket.gethostname(), os.cpu_count()))
@@ -528,9 +614,10 @@ if __name__ == "__main__":
     #print("Labels example: {}".format(dexed_db.get_preset_labels_from_file(3)))
 
     # print("numerical VSTi params: {}".format(Dexed.get_numerical_params_indexes()))
-    # print("categorical VSTi params: {}".format(Dexed.get_categorical_params_indexes()))
-
-    if True:
+    print("categorical VSTi params: {}".format(Dexed.get_categorical_params_indexes()))
+    dexed = Dexed(plugin_path='Dexed.dll')
+    print(f'n_params {dexed.n_params}')
+    if False:
         # Testing using DawDreamer instead of RenderMan
         print("Test")
 

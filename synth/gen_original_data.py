@@ -11,7 +11,7 @@ if __name__ == "__main__":
     __spec__ = None
 
     # Set parameters
-    save_dir = os.path.join(os.path.realpath('..'), 'data', 'preset_data')
+    save_dir = os.path.join(os.path.realpath('..'), 'data', 'preset_data2')
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
@@ -52,6 +52,8 @@ if __name__ == "__main__":
         elif preset_UID in split_inds['test']:
             split_dict['test']['npz_fnames'].append('{}.npz'.format(preset_UID))
             split_dict['test']['wav_fnames'].append('{}.wav'.format(preset_UID))
+        else:
+            print("missing_split in dict")
 
     # Save split dict
     with open(os.path.join(save_dir, 'split_dict.json'), 'w') as f:
