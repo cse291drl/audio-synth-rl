@@ -48,4 +48,4 @@ if __name__ == '__main__':
 	)
 
     demo_batch = next(iter(target_sound_loader))
-    pred = model(demo_batch)
+    pred = model(demo_batch['spectrogram'])
