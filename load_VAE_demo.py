@@ -48,4 +48,12 @@ if __name__ == '__main__':
 	)
 
     demo_batch = next(iter(target_sound_loader))
-    pred = model(demo_batch['spectrogram'])
+    pred = model(demo_batch['spectrogram'].unsqueeze(1))
+
+    # Options we can use as our feature extractor
+    fe_emb1 = model.ae_model.encoder.single_ch_cnn(demo_batch['spectrogram'].unsqueeze(1))
+    fe_emb2 = model.ae_model.encoder.features_mixer_cnn(fe_emb1)
+    fe_emb3 = model.ae_model.encoder(demo_batch['spectrogram'].unsqueeze(1))
+    fe_emb4 = model.ae_model.encoder(demo_batch['spectrogram'].unsqueeze(1))
+
+    # TODO use VAE to get synth parameters
