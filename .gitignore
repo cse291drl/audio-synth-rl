@@ -2,6 +2,7 @@
 synth/*.wav
 data/*
 !data/README.md
+synth/dexed_presets
 
 vae_model/*.tar
 

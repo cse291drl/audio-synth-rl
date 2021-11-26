@@ -25,7 +25,11 @@ import pathlib
 #import pkgutil
 
 import dawdreamer as daw    # Replaces Renderman
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except:
+    print("Can't import sounddevice!!!!")
+    sd = None
 
 
 # Pickled numpy arrays storage in sqlite3 DB
