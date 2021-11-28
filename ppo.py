@@ -12,6 +12,7 @@ from tqdm import tqdm
 from data_modules.data_modules import AudioHandler, TargetSoundDataset
 from loss import presetParam
 from synth.dexed import Dexed
+import random
 
 import uuid
 
@@ -659,6 +660,12 @@ if __name__ == '__main__':
  
 	writer = SummaryWriter()
 
+	seed = 1000
+ 
+	# Set seed
+	torch.random.manual_seed(seed)
+	np.random.seed(seed)
+	random.seed(seed)
 	# hyperparameters
 	steps_per_episode = 2 # 25
 	rollout_batch_size = 16 # 32
@@ -813,13 +820,13 @@ if __name__ == '__main__':
 		# init_params = torch.rand((rollout_batch_size, n_params))
 		# init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
 		
-		processed_target_spectrograms = torch.cat([target_spectrograms, torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
-		print("processed_initial_ground_truth_spectrograms: ", processed_initial_ground_truth_spectrograms.shape)
-		1/0
+		processed_target_spectrograms = torch.cat([target_spectrograms.unsqueeze(1), torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
+		# print("processed_initial_ground_truth_spectrograms: ", processed_target_spectrograms.shape)
+		# 1/0
 		
 		init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
-		print("init_param_vectors: ", init_param_vectors.shape)
-		1/0
+		# print("init_param_vectors: ", init_param_vectors.shape)
+		# 1/0
 		init_spectrograms = []
 		
 		if not use_multiprocessing_for_spectrogram_metrics:
