@@ -918,10 +918,13 @@ if __name__ == '__main__':
 		
 		with torch.no_grad():
 			params_mse = ((target_params - predicted_params)**2).mean(-1).mean().item()
-
+		
+		print("Params mse: ", params_mse)
+		1/0
+		
 		writer.add_scalar('train/avg_mae_log', avg_mae_log, iter_index)
 		writer.add_scalar('train/avg_sc', avg_sc, iter_index)
-		writer.add_scalar("train/params_mse", params_mse, iter_index)
+		writer.add_scalar("train/synth_params_mse", params_mse, iter_index)
 		
 		# Compute advantages and normalize
 		V, _ = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
