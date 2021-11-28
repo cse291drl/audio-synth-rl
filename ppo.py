@@ -330,13 +330,13 @@ class PPO:
 				rewards:	(rollout_batch_size, 1)
 		"""
 		# (rollout_batch_size, num_continuous_action_dims + num_discrete_actions_dims)
-		actions = torch.hstack((continuous_actions, discrete_actions))
-		batch_size = actions.size(0)
-  
+		# actions = torch.hstack((continuous_actions, discrete_actions))
+		batch_size = continuous_actions.size(0) #actions.size(0)
+		
 		pred_states = {
 			"target_spectrogram" : states['target_spectrogram'], 
 			"current_spectrogram" : [],
-			"current_params" : actions,
+			"current_params" : [],
 			"steps_remaining" : states['steps_remaining'] - 1
    		}
 		
@@ -349,8 +349,11 @@ class PPO:
 			# Convert learnable param to synthesizer param
 			param = presetParam((continuous_actions[i].unsqueeze(0), discrete_actions[i].unsqueeze(0)), learnable=True)
 			audiohandler = AudioHandler()
+			
+			synth_params = param.to_params()[0]
+			
 			# Get next state
-			predicted_spectrogram = audiohandler.generateSpectrogram(param.to_params()[0])
+			predicted_spectrogram = audiohandler.generateSpectrogram(synth_params)
 
 			# Generate reward
 			if reward_metric == "mae":
@@ -358,7 +361,7 @@ class PPO:
 			else:
 				# sc: lower is better
 				rew = -float(audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i],predicted_spectrogram))
-			return predicted_spectrogram, rew
+			return synth_params, predicted_spectrogram, rew
 		
 		for i in range(batch_size):
 			if self.use_multiprocessing:
@@ -370,9 +373,12 @@ class PPO:
 			else:
 				# Convert learnable param to synthesizer param
 				param = presetParam((continuous_actions[i].unsqueeze(0), discrete_actions[i].unsqueeze(0)), learnable=True)
-
+				
+				synth_params = param.to_params()[0]
+				pred_states['current_params'].append(torch.from_numpy(synth_params))
+				
 				# Get next state
-				predicted_spectrogram = self.audiohandler.generateSpectrogram(param.to_params()[0])
+				predicted_spectrogram = self.audiohandler.generateSpectrogram(synth_params)
 				pred_states['current_spectrogram'].append(predicted_spectrogram)
 				# Generate reward
 				if self.reward_metric == "mae":
@@ -384,11 +390,17 @@ class PPO:
     
 		if self.use_multiprocessing:
 			job_results = dask.compute(*jobs, scheduler="processes")
-			for predicted_spectrogram, rew in job_results:
+			for synth_params, predicted_spectrogram, rew in job_results:
+				pred_states['current_params'].append(torch.from_numpy(synth_params))
 				pred_states['current_spectrogram'].append(predicted_spectrogram)
 				rewards.append(rew)
    
+		pred_states['current_params'] = torch.stack(pred_states['current_params'])
+		print("pred_states[current_params]: ", pred_states['current_params'].shape)
+		1/0
+		
 		pred_states['current_spectrogram'] = torch.stack(pred_states['current_spectrogram'])
+		
 		# print(f"pred_state {pred_states['current_spectrogram'].shape}")
 		rewards = torch.tensor(rewards).reshape(-1, 1)
 
@@ -682,7 +694,9 @@ if __name__ == '__main__':
 	mapping_dict = AudioHandler.get_mapping_dict()
 	n_params = len(mapping_dict['Numerical']) + sum(
 		[len(*p.values()) for p in mapping_dict['Categorical']])
-
+	
+	num_synth_params = 155
+	
 	spectrogram_shape = (257, 345)
 
 	# define actor and critic models
@@ -693,7 +707,10 @@ if __name__ == '__main__':
 	actor = ActorModel(
 		sound_comparer=actor_comp_net,
 		intermediate_layers=IntermediateLayers(
-			416 + n_params + 1, 300, hidden_size=350
+			# 416 + n_params + 1,
+			416 + num_synth_params + 1,
+			300,
+			hidden_size=350
 		),
 		continuous_head=BasicActorHead(300, len(mapping_dict['Numerical'])),
 		discrete_head=BasicActorHead(300, 
