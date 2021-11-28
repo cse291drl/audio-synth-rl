@@ -828,10 +828,15 @@ if __name__ == '__main__':
 				init_spectrograms.append(_audiohandler.generateSpectrogram(init_param_vec))
 		else:
 			# Use multiprocessing to compute the initial spectrograms in parallel
+			def _job(params_vec):
+				ah = AudioHandler()
+				return ah.generateSpectrogram(params_vec)
+			
 			jobs = []
+			
 			for init_param_vec in init_param_vectors:
 				init_param_vec = init_param_vec.numpy()
-				jobs.append(dask.delayed(_audiohandler.generateSpectrogram)(init_param_vec))
+				jobs.append(dask.delayed(_job)(init_param_vec))
 			init_spectrograms = dask.compute(*jobs, scheduler="processes")
 		
 		init_spectrograms = torch.vstack(init_spectrograms)
