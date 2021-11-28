@@ -790,8 +790,8 @@ if __name__ == '__main__':
             return synth_params_tensor
 
 	# Test get actions and eval
-	actions, probs = ppo_model.get_actions(test_state_batch)
-	V, lp = ppo_model.evaluate(test_state_batch, actions)
+	# actions, probs = ppo_model.get_actions(test_state_batch)
+	# V, lp = ppo_model.evaluate(test_state_batch, actions)
 
 	# Training loop
 	target_iterator = iter(target_sound_loader)
@@ -810,7 +810,6 @@ if __name__ == '__main__':
 		target_spectrograms = data['spectrogram']
 
 		# Get initial guesses to complete starting state
-		# TODO: implement this instead of current random
 		# init_params = torch.rand((rollout_batch_size, n_params))
 		# init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
         
