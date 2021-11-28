@@ -543,12 +543,15 @@ class PPO:
 			continuous_log_probs = _log_probs['cont_log_probs']
 			discrete_log_probs = _log_probs['disc_log_probs']
 			obs, rews = self.step(obs, continuous_actions=continuous_actions, discrete_actions=discrete_actions)
+			
 			# Update continuous/discrete actions, continuous/discrete action log probs, and rewards
 			batch_continuous_acts.append(continuous_actions)
 			batch_discrete_acts.append(discrete_actions)
 			batch_continuous_log_probs.append(continuous_log_probs)
 			batch_discrete_log_probs.append(discrete_log_probs)
 			batch_rews.append(rews)
+			
+		last_timestep_predicted_synth_params = obs['current_params']
 
 		### Correctly reshape all aggregated tensors across all batches & rollouts ###
 	
@@ -603,7 +606,7 @@ class PPO:
 		batch_rews = batch_rews_unrolled.reshape(-1, 1)
 		# print(f"batch_rews22222 {batch_rews.shape}")	
   
-		return batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram
+		return batch_obs, last_timestep_predicted_synth_params, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram
 
 	def evaluate(self, batch_obs, batch_acts):
 		"""
@@ -730,7 +733,7 @@ if __name__ == '__main__':
 	)
 	critic = ValueModel(
 		sound_comparer=critic_comp_net,
-		decision_head=BasicActorHead(416 + n_params + 1, 1)
+		decision_head=BasicActorHead(416 + num_synth_params + 1, 1)
 	)
 
 	# test_state_batch = {
@@ -815,6 +818,9 @@ if __name__ == '__main__':
 			data = next(target_iterator)
 
 		target_spectrograms = data['spectrogram']
+		target_params = torch.from_numpy(data['params'])
+		print("Target params: ", target_params.shape)
+		1/0
 
 		# Get initial guesses to complete starting state
 		# init_params = torch.rand((rollout_batch_size, n_params))
@@ -870,8 +876,8 @@ if __name__ == '__main__':
 		batch_log_probs:		(rollout_batch_size * num_steps_per_episode, 1)
 		batch_rtgs:				(rollout_batch_size * num_steps_per_episode, 1)
 		"""
-		batch_obs, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
-
+		batch_obs, last_timestep_predicted_synth_params, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
+		
 		# Log
 		# batch_rews_unrolled: (rollout_batch_size, num_steps_per_episode)
 		writer.add_scalar('train/avg_discounted_reward', batch_rews_unrolled[:,0].mean().item(), iter_index)
@@ -905,10 +911,18 @@ if __name__ == '__main__':
 
 		avg_mae_log = sum(mae_log_vals)/len(mae_log_vals)
 		avg_sc = sum(sc_vals)/len(sc_vals)
+		
+		predicted_params = last_timestep_predicted_synth_params
+		print("Predicted params: ", predicted_params.shape)
+		1/0
+		
+		with torch.no_grad():
+			params_mse = ((target_params - predicted_params)**2).mean(-1).mean().item()
 
 		writer.add_scalar('train/avg_mae_log', avg_mae_log, iter_index)
 		writer.add_scalar('train/avg_sc', avg_sc, iter_index)
-
+		writer.add_scalar("train/params_mse", params_mse, iter_index)
+		
 		# Compute advantages and normalize
 		V, _ = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
 
