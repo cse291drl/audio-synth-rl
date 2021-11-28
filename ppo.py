@@ -726,15 +726,15 @@ if __name__ == '__main__':
 		decision_head=BasicActorHead(416 + n_params + 1, 1)
 	)
 
-	test_state_batch = {
-		'target_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
-		'current_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
-		'current_params': torch.rand((rollout_batch_size, n_params)),
-		'steps_remaining': torch.randint(0, steps_per_episode, (rollout_batch_size, 1))
-	}
+	# test_state_batch = {
+	# 	'target_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
+	# 	'current_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
+	# 	'current_params': torch.rand((rollout_batch_size, n_params)),
+	# 	'steps_remaining': torch.randint(0, steps_per_episode, (rollout_batch_size, 1))
+	# }
 
-	r_a_cont, r_a_disc = actor(test_state_batch)
-	r_c = critic(test_state_batch)
+	# r_a_cont, r_a_disc = actor(test_state_batch)
+	# r_c = critic(test_state_batch)
 
 	print(n_trainable_params(actor))
 	print(n_trainable_params(critic))
