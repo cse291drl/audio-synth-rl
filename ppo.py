@@ -397,8 +397,8 @@ class PPO:
 				rewards.append(rew)
    
 		pred_states['current_params'] = torch.stack(pred_states['current_params'])
-		print("pred_states[current_params]: ", pred_states['current_params'].shape)
-		1/0
+		# print("pred_states[current_params]: ", pred_states['current_params'].shape)
+		# 1/0
 		
 		pred_states['current_spectrogram'] = torch.stack(pred_states['current_spectrogram'])
 		
@@ -730,7 +730,7 @@ if __name__ == '__main__':
 	)
 	critic = ValueModel(
 		sound_comparer=critic_comp_net,
-		decision_head=BasicActorHead(416 + n_params + 1, 1)
+		decision_head=BasicActorHead(416 + num_synth_params + 1, 1)
 	)
 
 	# test_state_batch = {
@@ -815,7 +815,7 @@ if __name__ == '__main__':
 			data = next(target_iterator)
 
 		target_spectrograms = data['spectrogram']
-
+		target_params = data['params']
 		# Get initial guesses to complete starting state
 		# init_params = torch.rand((rollout_batch_size, n_params))
 		# init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
@@ -846,9 +846,9 @@ if __name__ == '__main__':
 				jobs.append(dask.delayed(_job)(init_param_vec))
 			init_spectrograms = dask.compute(*jobs, scheduler="processes")
 		
-		init_spectrograms = torch.vstack(init_spectrograms)
-		print("init_spectrograms: ", init_spectrograms.shape)
-		1/0
+		init_spectrograms = torch.stack(init_spectrograms)
+		# print("init_spectrograms: ", init_spectrograms.shape)
+		# 1/0
 
 		# Add number of steps remaining to the initial state
 		init_steps_remaining = torch.ones((rollout_batch_size, 1)) * steps_per_episode
