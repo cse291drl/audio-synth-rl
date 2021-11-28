@@ -264,7 +264,7 @@ class PPO:
 		self.continuous_params_dict = {
 			k:v 
    			for element in AudioHandler.get_mapping_dict()['Numerical'] 
-      		for k,v in element.items()
+	  		for k,v in element.items()
 		}
 		self.cont_logit_indices = np.array(list(self.continuous_params_dict.values()))
 		self.cont_param_indices = np.array(list(self.continuous_params_dict.keys()))
@@ -273,7 +273,7 @@ class PPO:
 		self.disc_params_dict = {
 			k:v 
    			for element in AudioHandler.get_mapping_dict()['Categorical'] 
-      		for k,v in element.items()
+	  		for k,v in element.items()
 		}
 
 		# Initialize optimizers for actor and critic
@@ -366,10 +366,10 @@ class PPO:
 		for i in range(batch_size):
 			if self.use_multiprocessing:
 				jobs.append(dask.delayed(get_next_state_and_reward_job)(i, 
-                                                            pred_states, 
-                                                            continuous_actions, 
-                                                            discrete_actions, 
-                                                            self.reward_metric))
+															pred_states, 
+															continuous_actions, 
+															discrete_actions, 
+															self.reward_metric))
 			else:
 				# Convert learnable param to synthesizer param
 				param = presetParam((continuous_actions[i].unsqueeze(0), discrete_actions[i].unsqueeze(0)), learnable=True)
@@ -387,7 +387,7 @@ class PPO:
 					# sc: lower is better
 					rew = -float(self.audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i],predicted_spectrogram))
 				rewards.append(rew)
-    
+	
 		if self.use_multiprocessing:
 			job_results = dask.compute(*jobs, scheduler="processes")
 			for synth_params, predicted_spectrogram, rew in job_results:
@@ -655,7 +655,7 @@ class PPO:
 
 
 if __name__ == '__main__':
-    __spec__ = None
+	__spec__ = None
  
 	writer = SummaryWriter()
 
@@ -676,7 +676,7 @@ if __name__ == '__main__':
 
 	# Load the target sounds
 	dataset = TargetSoundDataset(
-		data_dir=os.path.join('data', 'preset_data'),
+		data_dir=os.path.join('audio_data', 'preset_data'),
 		split_file='split_dict.json',
 		split_name='train',
 		return_params=True
@@ -741,53 +741,53 @@ if __name__ == '__main__':
 	print(f"Dataset len: {len(dataset)}")
 	# Initialize the PPO object
 	ppo_model = PPO(actor, critic)
-    
-    ## VAE stuff
-    _audiohandler = AudioHandler()
-    config_dir = './vae_model'
 
-    # Create model
-    with open(os.path.join(config_dir, 'subset_samplers.pickle'), 'rb') as f:
-        idx_helper = pickle.load(f)
-    with open(os.path.join(config_dir, 'config_train.pickle'), 'rb') as f:
-        conf_train = pickle.load(f)
-    with open(os.path.join(config_dir, 'config_model.pickle'), 'rb') as f:
-        conf_model = pickle.load(f)
+	## VAE stuff
+	_audiohandler = AudioHandler()
+	config_dir = './vae_model'
 
-    model_config, train_config = vae_config.model, vae_config.train
-    dataset = data.build.get_dataset(model_config, train_config)
+	# Create model
+	with open(os.path.join(config_dir, 'subset_samplers.pickle'), 'rb') as f:
+		idx_helper = pickle.load(f)
+	with open(os.path.join(config_dir, 'config_train.pickle'), 'rb') as f:
+		conf_train = pickle.load(f)
+	with open(os.path.join(config_dir, 'config_model.pickle'), 'rb') as f:
+		conf_model = pickle.load(f)
 
-    _, _, _, _vae_model = vae_model.build.build_extended_ae_model(conf_model, conf_train,
-                                                                     idx_helper)
-    _vae_model = _vae_model.eval()
+	model_config, train_config = vae_config.model, vae_config.train
+	dataset = data.build.get_dataset(model_config, train_config)
 
-    # Load from checkpoint
-    checkpoint_state_dict = torch.load(
-        os.path.join(config_dir, '00133.tar'), 
-        map_location=torch.device('cpu')
-    )
+	_, _, _, _vae_model = vae_model.build.build_extended_ae_model(conf_model, conf_train,
+																		idx_helper)
+	_vae_model = _vae_model.eval()
 
-    _vae_model.load_state_dict(checkpoint_state_dict['ae_model_state_dict'])
+	# Load from checkpoint
+	checkpoint_state_dict = torch.load(
+		os.path.join(config_dir, '00133.tar'), 
+		map_location=torch.device('cpu')
+	)
 
-    ae_model, reg_model = _vae_model.ae_model, _vae_model.reg_model
-    
-    
-    def get_full_synth_params_from_vae(input_spectrograms):
-        with torch.no_grad():
-            # Use correct values here
-            preset_UID = 0
-            ref_midi_pitch = 60
-            ref_midi_velocity = 100
+	_vae_model.load_state_dict(checkpoint_state_dict['ae_model_state_dict'])
 
-            sample_info = torch.tensor([preset_UID, ref_midi_pitch, ref_midi_velocity], dtype=torch.int32).unsqueeze(0)
-            ae_out = ae_model(input_spectrograms, sample_info)  # Spectral VAE - tuple output
+	ae_model, reg_model = _vae_model.ae_model, _vae_model.reg_model
 
-            _, _, z_K_sampled, _, _ = ae_out
-            v_out = reg_model(z_K_sampled)
 
-            out_presets_instance = DexedPresetsParams(learnable_presets=v_out, dataset=dataset)
-            synth_params_tensor = out_presets_instance.get_full()
-            return synth_params_tensor
+	def get_full_synth_params_from_vae(input_spectrograms):
+		with torch.no_grad():
+			# Use correct values here
+			preset_UID = 0
+			ref_midi_pitch = 60
+			ref_midi_velocity = 100
+
+			sample_info = torch.tensor([preset_UID, ref_midi_pitch, ref_midi_velocity], dtype=torch.int32).unsqueeze(0)
+			ae_out = ae_model(input_spectrograms, sample_info)  # Spectral VAE - tuple output
+
+			_, _, z_K_sampled, _, _ = ae_out
+			v_out = reg_model(z_K_sampled)
+
+			out_presets_instance = DexedPresetsParams(learnable_presets=v_out, dataset=dataset)
+			synth_params_tensor = out_presets_instance.get_full()
+			return synth_params_tensor
 
 	# Test get actions and eval
 	# actions, probs = ppo_model.get_actions(test_state_batch)
@@ -812,14 +812,14 @@ if __name__ == '__main__':
 		# Get initial guesses to complete starting state
 		# init_params = torch.rand((rollout_batch_size, n_params))
 		# init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
-        
-        processed_target_spectrograms = torch.cat([target_spectrograms, torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
-        print("processed_initial_ground_truth_spectrograms: ", processed_initial_ground_truth_spectrograms.shape)
-        1/0
-        
-        init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
-        print("init_param_vectors: ", init_param_vectors.shape)
-        1/0
+		
+		processed_target_spectrograms = torch.cat([target_spectrograms, torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
+		print("processed_initial_ground_truth_spectrograms: ", processed_initial_ground_truth_spectrograms.shape)
+		1/0
+		
+		init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
+		print("init_param_vectors: ", init_param_vectors.shape)
+		1/0
 		init_spectrograms = []
 		
 		if not use_multiprocessing_for_spectrogram_metrics:
@@ -835,8 +835,8 @@ if __name__ == '__main__':
 			init_spectrograms = dask.compute(*jobs, scheduler="processes")
 		
 		init_spectrograms = torch.vstack(init_spectrograms)
-        print("init_spectrograms: ", init_spectrograms.shape)
-        1/0
+		print("init_spectrograms: ", init_spectrograms.shape)
+		1/0
 
 		# Add number of steps remaining to the initial state
 		init_steps_remaining = torch.ones((rollout_batch_size, 1)) * steps_per_episode

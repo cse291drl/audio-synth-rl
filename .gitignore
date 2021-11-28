@@ -5,7 +5,7 @@ synth/*.wav
 synth/dexed_presets
 
 vae_model/*.tar
-
+audio_data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
