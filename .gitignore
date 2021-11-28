@@ -1,6 +1,6 @@
 # Project specific
 synth/*.wav
-data/*
+# data/*
 !data/README.md
 synth/dexed_presets
 
