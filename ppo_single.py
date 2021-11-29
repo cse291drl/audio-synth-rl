@@ -658,6 +658,9 @@ class PPO:
 		return V, {'cont_log_probs': cont_log_probs, 'disc_log_probs': disc_log_probs}
 
 
+
+
+
 if __name__ == '__main__':
 	__spec__ = None
  
@@ -670,10 +673,10 @@ if __name__ == '__main__':
 	np.random.seed(seed)
 	random.seed(seed)
 	# hyperparameters
-	steps_per_episode = 10 # 25
+	steps_per_episode = 5 # 25
 	rollout_batch_size = 1 # 32
 	num_train_iter = 100
-	n_updates_per_iteration = 10	 # Number of times to update actor/critic per iteration
+	n_updates_per_iteration = 5	 # Number of times to update actor/critic per iteration
 	use_multiprocessing_for_spectrogram_metrics = True
 	checkpoint_every_n_iters = 10
  
@@ -688,7 +691,7 @@ if __name__ == '__main__':
 	dataset = TargetSoundDataset(
 		data_dir=os.path.join('audio_data', 'preset_data'),
 		split_file='split_dict.json',
-		split_name='train',
+		split_name='test',
 		return_params=True
 	)
 
@@ -696,7 +699,7 @@ if __name__ == '__main__':
 		dataset=dataset,
 		batch_size=rollout_batch_size,
 		num_workers=4,
-		shuffle=True,
+		shuffle=False,
 		persistent_workers=True
 	)
 
@@ -750,7 +753,8 @@ if __name__ == '__main__':
 	print(n_trainable_params(critic))
 	print(f"Dataset len: {len(dataset)}")
 	# Initialize the PPO object
-	ppo_model = PPO(actor, critic,clip=0.3,actor_lr=1e-4, critic_lr=5e-5, cov_matrix_val=0.05,gamma=0.5)
+	ppo_model = PPO(actor, critic,clip=0.2,actor_lr=2e-4, critic_lr=1e-4, 
+                 cov_matrix_val=0.05,gamma=0.9)
 
 	## VAE stuff
 	_audiohandler = AudioHandler()
@@ -813,8 +817,72 @@ if __name__ == '__main__':
 		except StopIteration:
 			target_iterator = iter(target_sound_loader)
 			data = next(target_iterator)
- 
+		target_spectrograms = data['spectrogram']
+		target_params = data['params']
+	# print("Target params: ", target_params.shape)
+	# 1/0
+
+	# Get initial guesses to complete starting state
+	# init_params = torch.rand((rollout_batch_size, n_params))
+	# init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
+	
+	processed_target_spectrograms = torch.cat([target_spectrograms.unsqueeze(1), torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
+	# print("processed_initial_ground_truth_spectrograms: ", processed_target_spectrograms.shape)
+	# 1/0
+	
+	init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
+	# print("init_param_vectors: ", init_param_vectors.shape)
+	# 1/0
+
+	with torch.no_grad():
+		vae_params_mse = ((target_params - init_param_vectors)**2).mean(-1).mean().item()
+
+	init_spectrograms = []
+	
+	if not use_multiprocessing_for_spectrogram_metrics:
+		for init_param_vec in init_param_vectors:
+			init_param_vec = init_param_vec.numpy()
+			init_spectrograms.append(_audiohandler.generateSpectrogram(init_param_vec))
+	else:
+		# Use multiprocessing to compute the initial spectrograms in parallel
+		def _job(params_vec):
+			ah = AudioHandler()
+			return ah.generateSpectrogram(params_vec)
+		
+		jobs = []
+		
+		for init_param_vec in init_param_vectors:
+			init_param_vec = init_param_vec.numpy()
+			jobs.append(dask.delayed(_job)(init_param_vec))
+		init_spectrograms = dask.compute(*jobs, scheduler="processes")
+	
+	init_spectrograms = torch.stack(init_spectrograms)
+	# print("init_spectrograms: ", init_spectrograms.shape)
+	# 1/0
+
+	# Add number of steps remaining to the initial state
+	init_steps_remaining = torch.ones((rollout_batch_size, 1)) * steps_per_episode
+	# print(target_spectrograms.shape)
+	# print(init_spectrograms.shape)
+	# print(init_param_vectors.shape)
+	# print(init_steps_remaining.shape)
+	# 1/0
+	base_multiplier = 4
+	rollout_init_states = {
+		'target_spectrogram': target_spectrograms.repeat(base_multiplier,1,1),
+		'current_spectrogram': init_spectrograms.repeat(base_multiplier,1,1),
+		'current_params': init_param_vectors.repeat(base_multiplier,1),
+		'steps_remaining': init_steps_remaining.repeat(base_multiplier,1)
+	}
 	iter_index = 0
+
+	def _compute_mae_log_and_sc(target_spectrogram, predicted_spectrogram):
+		audiohandler = AudioHandler()
+		return float(audiohandler.getMAE(target_spectrogram,predicted_spectrogram)), float(audiohandler.getSpectralConvergence(target_spectrogram,predicted_spectrogram)) 
+
+ 
+	vae_mae_log, vae_sc = _compute_mae_log_and_sc(target_spectrograms, init_spectrograms)
+
 
 	for i in tqdm(range(num_train_iter)):
 		# Rollout from rollout_batch_size starts
@@ -824,59 +892,66 @@ if __name__ == '__main__':
 			except StopIteration:
 				target_iterator = iter(target_sound_loader)
 				data = next(target_iterator)
-
-		target_spectrograms = data['spectrogram']
-		target_params = data['params']
-		# print("Target params: ", target_params.shape)
-		# 1/0
-
-		# Get initial guesses to complete starting state
-		# init_params = torch.rand((rollout_batch_size, n_params))
-		# init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
-		
-		processed_target_spectrograms = torch.cat([target_spectrograms.unsqueeze(1), torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
-		# print("processed_initial_ground_truth_spectrograms: ", processed_target_spectrograms.shape)
-		# 1/0
-		
-		init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
-		# print("init_param_vectors: ", init_param_vectors.shape)
-		# 1/0
-  
-		with torch.no_grad():
-			vae_params_mse = ((target_params - init_param_vectors)**2).mean(-1).mean().item()
 		writer.add_scalar("train/vae_synth_params_mse", vae_params_mse, iter_index)
-		init_spectrograms = []
-		
-		if not use_multiprocessing_for_spectrogram_metrics:
-			for init_param_vec in init_param_vectors:
-				init_param_vec = init_param_vec.numpy()
-				init_spectrograms.append(_audiohandler.generateSpectrogram(init_param_vec))
-		else:
-			# Use multiprocessing to compute the initial spectrograms in parallel
-			def _job(params_vec):
-				ah = AudioHandler()
-				return ah.generateSpectrogram(params_vec)
-			
-			jobs = []
-			
-			for init_param_vec in init_param_vectors:
-				init_param_vec = init_param_vec.numpy()
-				jobs.append(dask.delayed(_job)(init_param_vec))
-			init_spectrograms = dask.compute(*jobs, scheduler="processes")
-		
-		init_spectrograms = torch.stack(init_spectrograms)
-		# print("init_spectrograms: ", init_spectrograms.shape)
-		# 1/0
+		writer.add_scalar("train/vae_mae_log", vae_mae_log, iter_index)
+		writer.add_scalar("train/vae_sc", vae_sc, iter_index)
+		# target_spectrograms = data['spectrogram']
+		# target_params = data['params']
+		# # print("Target params: ", target_params.shape)
+		# # 1/0
 
-		# Add number of steps remaining to the initial state
-		init_steps_remaining = torch.ones((rollout_batch_size, 1)) * steps_per_episode
+		# # Get initial guesses to complete starting state
+		# # init_params = torch.rand((rollout_batch_size, n_params))
+		# # init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
+		
+		# processed_target_spectrograms = torch.cat([target_spectrograms.unsqueeze(1), torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
+		# # print("processed_initial_ground_truth_spectrograms: ", processed_target_spectrograms.shape)
+		# # 1/0
+		
+		# init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
+		# # print("init_param_vectors: ", init_param_vectors.shape)
+		# # 1/0
+  
+		# with torch.no_grad():
+		# 	vae_params_mse = ((target_params - init_param_vectors)**2).mean(-1).mean().item()
+		# writer.add_scalar("train/vae_synth_params_mse", vae_params_mse, iter_index)
+		# init_spectrograms = []
+		
+		# if not use_multiprocessing_for_spectrogram_metrics:
+		# 	for init_param_vec in init_param_vectors:
+		# 		init_param_vec = init_param_vec.numpy()
+		# 		init_spectrograms.append(_audiohandler.generateSpectrogram(init_param_vec))
+		# else:
+		# 	# Use multiprocessing to compute the initial spectrograms in parallel
+		# 	def _job(params_vec):
+		# 		ah = AudioHandler()
+		# 		return ah.generateSpectrogram(params_vec)
+			
+		# 	jobs = []
+			
+		# 	for init_param_vec in init_param_vectors:
+		# 		init_param_vec = init_param_vec.numpy()
+		# 		jobs.append(dask.delayed(_job)(init_param_vec))
+		# 	init_spectrograms = dask.compute(*jobs, scheduler="processes")
+		
+		# init_spectrograms = torch.stack(init_spectrograms)
+		# # print("init_spectrograms: ", init_spectrograms.shape)
+		# # 1/0
 
-		rollout_init_states = {
-			'target_spectrogram': target_spectrograms,
-			'current_spectrogram': init_spectrograms,
-			'current_params': init_param_vectors,
-			'steps_remaining': init_steps_remaining
-		}
+		# # Add number of steps remaining to the initial state
+		# init_steps_remaining = torch.ones((rollout_batch_size, 1)) * steps_per_episode
+		# # print(target_spectrograms.shape)
+		# # print(init_spectrograms.shape)
+		# # print(init_param_vectors.shape)
+		# # print(init_steps_remaining.shape)
+		# # 1/0
+		# base_multiplier = 16
+		# rollout_init_states = {
+		# 	'target_spectrogram': target_spectrograms.repeat(base_multiplier,1,1),
+		# 	'current_spectrogram': init_spectrograms.repeat(base_multiplier,1,1),
+		# 	'current_params': init_param_vectors.repeat(base_multiplier,1),
+		# 	'steps_remaining': init_steps_remaining.repeat(base_multiplier,1)
+		# }
 		
 		# Do rollouts
 		"""
@@ -901,9 +976,9 @@ if __name__ == '__main__':
 		mae_log_vals = []
 		sc_vals = []
   
-		def _compute_mae_log_and_sc(target_spectrogram, predicted_spectrogram):
-			audiohandler = AudioHandler()
-			return float(audiohandler.getMAE(target_spectrogram,predicted_spectrogram)), float(audiohandler.getSpectralConvergence(target_spectrogram,predicted_spectrogram)) 
+		# def _compute_mae_log_and_sc(target_spectrogram, predicted_spectrogram):
+		# 	audiohandler = AudioHandler()
+		# 	return float(audiohandler.getMAE(target_spectrogram,predicted_spectrogram)), float(audiohandler.getSpectralConvergence(target_spectrogram,predicted_spectrogram)) 
   
 		# Use multiprocessing
 		if use_multiprocessing_for_spectrogram_metrics:
