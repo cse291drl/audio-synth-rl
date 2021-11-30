@@ -5,12 +5,13 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
-
+from scipy.io import wavfile
 import sys
 sys.path.append("..") #Uncomment if running from main dir
 from synth.dexed import Dexed
 import audio 
-
+import librosa.display
+import matplotlib.pyplot as plt
 class TargetSoundDataset(Dataset):
 	""" Dataset containing target sounds.
 	
@@ -111,6 +112,21 @@ class AudioHandler:
 			return audio, self.spectrogram(audio)
 		return audio
 
+	def saveAudio(self,params, filename,spec = True, fig_title = 'Spectrogram',figsize = (7,5)):
+		if spec:
+			audio_data, spectrogram = self.generateAudio(params,return_spec = True)
+			wavfile.write(f"{filename}.wav",22050,audio_data)
+			plt.figure(figsize=figsize)
+			spectrogram = np.float32(spectrogram)
+			librosa.display.specshow(spectrogram, shading='flat', #ax=plt.gca(),
+                                          cmap=('magma'))
+			plt.gca().set_title(fig_title)
+			plt.colorbar()
+			plt.savefig(f"{filename}_spec.png")
+		else:
+			audio_data = self.generateAudio(params,return_spec=False)
+			wavfile.write(f"{filename}.wav",22050,audio_data)
+			
 	def generateSpectrogram(self, params, return_spec = True ):
 		'''
 		Generates audio given a particular set of parameters, and returns the associated spectrogram with the audio.

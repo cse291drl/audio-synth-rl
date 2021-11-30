@@ -34,6 +34,10 @@ from data.preset import DexedPresetsParams
 import vae_config
 import data.build
 
+from datetime import datetime
+
+
+
 class CNNFeatExtractor(nn.Module):
 	"""CNN for extracting feats from sound spectrograms or stacked 
 	spectrograms if used in ComparerNetwork. 
@@ -681,7 +685,7 @@ if __name__ == '__main__':
 	checkpoint_every_n_iters = 10
  
 	checkpoints_parent_dir = "checkpointed_models"
-	checkpoint_run_id = str(uuid.uuid4())
+	checkpoint_run_id = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
 	checkpoints_dir = os.path.join(checkpoints_parent_dir, checkpoint_run_id)
 	os.makedirs(checkpoints_dir)
  
@@ -691,7 +695,7 @@ if __name__ == '__main__':
 	dataset = TargetSoundDataset(
 		data_dir=os.path.join('audio_data', 'preset_data'),
 		split_file='split_dict.json',
-		split_name='test',
+		split_name='train',
 		return_params=True
 	)
 
@@ -753,8 +757,8 @@ if __name__ == '__main__':
 	print(n_trainable_params(critic))
 	print(f"Dataset len: {len(dataset)}")
 	# Initialize the PPO object
-	ppo_model = PPO(actor, critic,clip=0.2,actor_lr=2e-4, critic_lr=1e-4, 
-                 cov_matrix_val=0.05,gamma=0.9)
+	ppo_model = PPO(actor, critic,clip=0.2,actor_lr=1e-3, critic_lr=5e-4, 
+				 cov_matrix_val=0.5,gamma=0.9)
 
 	## VAE stuff
 	_audiohandler = AudioHandler()
@@ -867,7 +871,7 @@ if __name__ == '__main__':
 	# print(init_param_vectors.shape)
 	# print(init_steps_remaining.shape)
 	# 1/0
-	base_multiplier = 4
+	base_multiplier = 8
 	rollout_init_states = {
 		'target_spectrogram': target_spectrograms.repeat(base_multiplier,1,1),
 		'current_spectrogram': init_spectrograms.repeat(base_multiplier,1,1),
@@ -880,18 +884,21 @@ if __name__ == '__main__':
 		audiohandler = AudioHandler()
 		return float(audiohandler.getMAE(target_spectrogram,predicted_spectrogram)), float(audiohandler.getSpectralConvergence(target_spectrogram,predicted_spectrogram)) 
 
- 
-	vae_mae_log, vae_sc = _compute_mae_log_and_sc(target_spectrograms, init_spectrograms)
+	
+	vae_mae_log, vae_sc = _compute_mae_log_and_sc(target_spectrograms.squeeze(), init_spectrograms.squeeze())
 
+	audiohandler = AudioHandler()
+	audiohandler.saveAudio(init_param_vectors.squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "vae_audio"),spec=True,fig_title="VAE Spectrogram")
+	audiohandler.saveAudio(target_params.squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "target_audio"),spec=True,fig_title="Target Spectrogram")
 
 	for i in tqdm(range(num_train_iter)):
 		# Rollout from rollout_batch_size starts
-		if not overfit:
-			try:
-				data = next(target_iterator)
-			except StopIteration:
-				target_iterator = iter(target_sound_loader)
-				data = next(target_iterator)
+		# if not overfit:
+		# 	try:
+		# 		data = next(target_iterator)
+		# 	except StopIteration:
+		# 		target_iterator = iter(target_sound_loader)
+		# 		data = next(target_iterator)
 		writer.add_scalar("train/vae_synth_params_mse", vae_params_mse, iter_index)
 		writer.add_scalar("train/vae_mae_log", vae_mae_log, iter_index)
 		writer.add_scalar("train/vae_sc", vae_sc, iter_index)
@@ -1077,3 +1084,5 @@ if __name__ == '__main__':
 				},
 				os.path.join(checkpoints_dir, f"model_training_iteration_{i}.pt")
 			)
+			audiohandler.saveAudio(predicted_params[0,:].squeeze().numpy().astype(float),
+                          os.path.join(checkpoints_dir, f"pred_audio_iter_{i}"),spec=True,fig_title=f"Predicted Parameter Spectrogram at epoch {i}")
