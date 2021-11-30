@@ -3,7 +3,8 @@ synth/*.wav
 # data/*
 !data/README.md
 synth/dexed_presets
-
+checkpointed_models
+runs
 vae_model/*.tar
 audio_data/
 

@@ -77,7 +77,7 @@ class CNNFeatExtractor_v2(nn.Module):
 		super().__init__()
 		self.ae_model = ae_model.eval()
 		for param in self.ae_model.parameters():
-    		param.requires_grad = False
+			param.requires_grad = False
 		self.intermediate_layers = intermediate_layers
 
 	def forward(self, x):
