@@ -36,40 +36,63 @@ import data.build
 
 from datetime import datetime
 
+# class CNNFeatExtractor(nn.Module):
+# 	"""CNN for extracting feats from sound spectrograms or stacked 
+# 	spectrograms if used in ComparerNetwork. 
+# 	"""
+# 	def __init__(self, n_feat_channels, n_filters=32, dropout=0.2,
+# 			filter_sizes=[5,7,9]):
+# 		super().__init__()
+# 		self.conv1 = nn.Conv1d(in_channels=n_feat_channels, 
+# 			out_channels=n_filters, kernel_size=filter_sizes[0], stride=1, 
+# 			padding=filter_sizes[0]//2
+# 		)
+# 		self.act1 = nn.ReLU()
+# 		self.dropout1 = nn.Dropout(dropout)
+# 		self.conv2 = nn.Conv1d(in_channels=n_filters, 
+# 			out_channels=n_filters, kernel_size=filter_sizes[1], stride=1, 
+# 			padding=filter_sizes[1]//2
+# 		)
+# 		self.act2 = nn.ReLU()
+# 		self.dropout2 = nn.Dropout(dropout)
+# 		self.conv3 = nn.Conv1d(in_channels=n_filters, 
+# 			out_channels=n_filters, kernel_size=filter_sizes[2], stride=1, 
+# 			padding=filter_sizes[2]//2
+# 		)
+# 		self.act3 = nn.ReLU()
+# 		self.dropout3 = nn.Dropout(dropout)
+
+# 	def forward(self, x):
+# 		x = self.dropout1(self.act1(self.conv1(x)))
+# 		x = self.dropout2(self.act2(self.conv2(x)))
+# 		x = self.dropout3(self.act3(self.conv3(x)))
+# 		return x
 
 
-class CNNFeatExtractor(nn.Module):
+class CNNFeatExtractor_v2(nn.Module):
 	"""CNN for extracting feats from sound spectrograms or stacked 
 	spectrograms if used in ComparerNetwork. 
 	"""
-	def __init__(self, n_feat_channels, n_filters=32, dropout=0.2,
-			filter_sizes=[5,7,9]):
+	def __init__(self, ae_model, intermediate_layers):
 		super().__init__()
-		self.conv1 = nn.Conv1d(in_channels=n_feat_channels, 
-			out_channels=n_filters, kernel_size=filter_sizes[0], stride=1, 
-			padding=filter_sizes[0]//2
-		)
-		self.act1 = nn.ReLU()
-		self.dropout1 = nn.Dropout(dropout)
-		self.conv2 = nn.Conv1d(in_channels=n_filters, 
-			out_channels=n_filters, kernel_size=filter_sizes[1], stride=1, 
-			padding=filter_sizes[1]//2
-		)
-		self.act2 = nn.ReLU()
-		self.dropout2 = nn.Dropout(dropout)
-		self.conv3 = nn.Conv1d(in_channels=n_filters, 
-			out_channels=n_filters, kernel_size=filter_sizes[2], stride=1, 
-			padding=filter_sizes[2]//2
-		)
-		self.act3 = nn.ReLU()
-		self.dropout3 = nn.Dropout(dropout)
+		self.ae_model = ae_model.eval()
+		for param in self.ae_model.parameters():
+    		param.requires_grad = False
+		self.intermediate_layers = intermediate_layers
 
 	def forward(self, x):
-		x = self.dropout1(self.act1(self.conv1(x)))
-		x = self.dropout2(self.act2(self.conv2(x)))
-		x = self.dropout3(self.act3(self.conv3(x)))
+		# Pad 2 extra timesteps filled with zeros to the input spectrogram
+		# x shape: [batch_size, 1, num_bins, num_timesteps]
+		print(x.shape)
+		1/0
+		x = torch.cat([
+			x, 
+			torch.zeros(x.size(0), x.size(1), x.size(2), 2, device=x.device)
+		], axis=-1)
+		x = self.ae_model(x)
+		_, _, z_K_sampled, _, _ = x
+		x = self.intermediate_layers(z_K_sampled)
 		return x
-
 
 class CNNComparer(nn.Module):
 	""" For use in ComparerNetwork """
@@ -204,6 +227,17 @@ class ComparerNetwork(nn.Module):
 		current_sound_emb = self.feature_extractor(state['current_spectrogram'])
 		x = torch.cat((target_sound_emb, current_sound_emb), dim=1)
 		return self.comparer_net(x)
+
+class ComparerNetwork_v2(nn.Module):
+	def __init__(self, feature_extractor):
+		super().__init__()
+		self.feature_extractor = feature_extractor
+
+	def forward(self, state):
+		target_sound_emb = self.feature_extractor(state['target_spectrogram'])
+		current_sound_emb = self.feature_extractor(state['current_spectrogram'])
+		x = torch.cat((target_sound_emb, current_sound_emb), dim=-1)
+		return x
 
 
 class ValueModel(nn.Module):
@@ -735,49 +769,11 @@ if __name__ == '__main__':
 	spectrogram_shape = (257, 345)
 
 	# define actor and critic models
-	actor_comp_net = ComparerNetwork(
-		feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
-		comparer_net=CNNComparer(n_feat_channels=32*2)
-	).to(device)
-	actor = ActorModel(
-		sound_comparer=actor_comp_net,
-		intermediate_layers=IntermediateLayers(
-			# 416 + n_params + 1,
-			416 + num_synth_params + 1,
-			400,
-			hidden_size=400#350
-		),
-		continuous_head=BasicActorHead(400, len(mapping_dict['Numerical'])),
-		discrete_head=BasicActorHead(400, 
-			sum([len(*p.values()) for p in mapping_dict['Categorical']])
-		)
-	).to(device)
-	critic_comp_net = ComparerNetwork(
-		feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
-		comparer_net=CNNComparer(n_feat_channels=32*2)
-	).to(device)
-	critic = ValueModel(
-		sound_comparer=critic_comp_net,
-		decision_head=BasicActorHead(416 + num_synth_params + 1, 1)
-	).to(device)
-
-	# test_state_batch = {
-	# 	'target_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
-	# 	'current_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
-	# 	'current_params': torch.rand((rollout_batch_size, n_params)),
-	# 	'steps_remaining': torch.randint(0, steps_per_episode, (rollout_batch_size, 1))
-	# }
-
-	# r_a_cont, r_a_disc = actor(test_state_batch)
-	# r_c = critic(test_state_batch)
-
-	print(n_trainable_params(actor))
-	print(n_trainable_params(critic))
-	print(f"Dataset len: {len(dataset)}")
-	# Initialize the PPO object
-	ppo_model = PPO(actor, critic,clip=0.2,actor_lr=1e-3, critic_lr=5e-4, 
-				 cov_matrix_val=0.5,gamma=0.9)
-
+	# actor_comp_net = ComparerNetwork(
+	# 	feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
+	# 	comparer_net=CNNComparer(n_feat_channels=32*2)
+	# ).to(device)
+	
 	## VAE stuff
 	_audiohandler = AudioHandler()
 	config_dir = './vae_model'
@@ -806,6 +802,68 @@ if __name__ == '__main__':
 	_vae_model.load_state_dict(checkpoint_state_dict['ae_model_state_dict'])
 
 	ae_model, reg_model = _vae_model.ae_model, _vae_model.reg_model
+	
+	# actor_comp_net = ComparerNetwork(
+	# 	feature_extractor=CNNFeatExtractor_v2(vae_base=n_feat_channels=spectrogram_shape[0]),
+	# 	comparer_net=CNNComparer(n_feat_channels=32*2)
+	# ).to(device)
+	
+	actor_comp_net = ComparerNetwork_v2(
+		feature_extractor=CNNFeatExtractor_v2(ae_model=ae_model, intermediate_layers=IntermediateLayers(
+			610,
+			256,
+			hidden_size=512 #350
+		)),
+	).to(device)
+
+	
+	actor = ActorModel(
+		sound_comparer=actor_comp_net,
+		intermediate_layers=IntermediateLayers(
+			# 416 + n_params + 1,
+			(2*256) + num_synth_params + 1,
+			400,
+			hidden_size=400#350
+		),
+		continuous_head=BasicActorHead(400, len(mapping_dict['Numerical'])),
+		discrete_head=BasicActorHead(400, 
+			sum([len(*p.values()) for p in mapping_dict['Categorical']])
+		)
+	).to(device)
+	
+	# critic_comp_net = ComparerNetwork(
+	# 	feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
+	# 	comparer_net=CNNComparer(n_feat_channels=32*2)
+	# ).to(device)
+	critic_comp_net = ComparerNetwork_v2(
+		feature_extractor=CNNFeatExtractor_v2(ae_model=ae_model, intermediate_layers=IntermediateLayers(
+			610,
+			256,
+			hidden_size=512
+		)),
+	).to(device)
+	
+	critic = ValueModel(
+		sound_comparer=critic_comp_net,
+		decision_head=BasicActorHead(416 + num_synth_params + 1, 1)
+	).to(device)
+
+	# test_state_batch = {
+	# 	'target_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
+	# 	'current_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
+	# 	'current_params': torch.rand((rollout_batch_size, n_params)),
+	# 	'steps_remaining': torch.randint(0, steps_per_episode, (rollout_batch_size, 1))
+	# }
+
+	# r_a_cont, r_a_disc = actor(test_state_batch)
+	# r_c = critic(test_state_batch)
+
+	print(n_trainable_params(actor))
+	print(n_trainable_params(critic))
+	print(f"Dataset len: {len(dataset)}")
+	# Initialize the PPO object
+	ppo_model = PPO(actor, critic,clip=0.2,actor_lr=1e-3, critic_lr=5e-4, 
+				 cov_matrix_val=0.5,gamma=0.9)
 
 
 	def get_full_synth_params_from_vae(input_spectrograms):
