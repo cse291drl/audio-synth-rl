@@ -233,6 +233,21 @@ class ActorModel(nn.Module):
 		self.intermediate_layers = intermediate_layers
 		self.continuous_head = continuous_head
 		self.discrete_head = discrete_head
+		self.continuous_params_dict = {
+			k:v 
+			for element in AudioHandler.get_mapping_dict()['Numerical'] 
+			for k,v in element.items()
+		}
+		self.cont_logit_indices = np.array(list(self.continuous_params_dict.values()))
+		self.cont_param_indices = np.array(list(self.continuous_params_dict.keys()))
+		self.num_continuous = len(self.cont_logit_indices)
+		self.cov_matrix_val = 1.0
+		self.cov_var = nn.Parameter(torch.full(
+			size=(self.num_continuous,), 
+			fill_value=self.cov_matrix_val,
+			device=device
+		))
+		self.cov_mat = torch.diag(self.cov_var)
 
 	def forward(self, state):
 		sound_dif_emb = self.sound_comparer(state)
@@ -280,7 +295,8 @@ class PPO:
    			for element in AudioHandler.get_mapping_dict()['Categorical'] 
 	  		for k,v in element.items()
 		}
-
+		
+		self.cov_mat = self.actor.cov_mat
 		# Initialize optimizers for actor and critic
 		self.actor_optim = torch.optim.Adam(
 			self.actor.parameters(), lr=self.actor_lr
@@ -291,11 +307,6 @@ class PPO:
 
 		# Initialize the covariance matrix used to query the actor for 
 		# continuous actions
-		self.cov_var = nn.Parameter(torch.full(
-			size=(self.num_continuous,), 
-			fill_value=self.cov_matrix_val
-		))
-		self.cov_mat = torch.diag(self.cov_var)
 
 	@staticmethod
 	def unbatch_states(states):
@@ -362,10 +373,10 @@ class PPO:
 
 			# Generate reward
 			if reward_metric == "mae":
-				rew = -float(audiohandler.getMAE(pred_states['target_spectrogram'][i],predicted_spectrogram))
+				rew = -float(audiohandler.getMAE(pred_states['target_spectrogram'][i].detach().cpu(),predicted_spectrogram.detach().cpu()))
 			else:
 				# sc: lower is better
-				rew = -float(audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i],predicted_spectrogram))
+				rew = -float(audiohandler.getSpectralConvergence(pred_states['target_spectrogram'][i].detach().cpu(),predicted_spectrogram.detach().cpu()))
 			return synth_params, predicted_spectrogram, rew
 		
 		for i in range(batch_size):
@@ -426,6 +437,8 @@ class PPO:
 			dict of tensors of actions for disc/cont params
 			dict of tensors of log probs of actions
 		"""
+		for k in states:
+			states[k] = states[k].to(device)
 		cont_action_logits, disc_action_logits = self.actor(states)
 
 		if cont_action_logits.dim() > 1:
@@ -439,13 +452,15 @@ class PPO:
 		# Sample actions from multivariate normal distribution for 
 		# continuous params
 		cont_means = self.continuous_activation(cont_action_logits)
-		dist = MultivariateNormal(cont_means, cov_mat)
+		dist = MultivariateNormal(cont_means, cov_mat.to(device))
+		# print(cont_means.device)
+		# print(cov_mat.device)
 		cont_actions = self.continuous_activation(dist.sample())
 		cont_log_probs = dist.log_prob(cont_actions)
 
 		# Sample actions from categorical distributions for discrete params
-		disc_actions = torch.zeros_like(disc_action_logits)
-		disc_log_probs = torch.zeros(disc_action_logits.shape[0])
+		disc_actions = torch.zeros_like(disc_action_logits,device=device)
+		disc_log_probs = torch.zeros(disc_action_logits.shape[0],device=device)
 
 		for dexed_idx, log_idx in self.disc_params_dict.items():
 			logits = disc_action_logits[:, log_idx]
@@ -527,7 +542,7 @@ class PPO:
 		for i in range(n_steps):
 			# Add current state info (obs) to batch_obs
 			for k,v in obs.items():
-				batch_obs[k].append(v)
+				batch_obs[k].append(v.to(device))
 
 			# Get action from actor and take step
 			# Note on the shapes of the tensors below:
@@ -555,7 +570,7 @@ class PPO:
 			batch_discrete_log_probs.append(discrete_log_probs)
 			batch_rews.append(rews)
 			
-		last_timestep_predicted_synth_params = obs['current_params']
+		last_timestep_predicted_synth_params = obs['current_params'].to(device)
 
 		### Correctly reshape all aggregated tensors across all batches & rollouts ###
 	
@@ -646,16 +661,16 @@ class PPO:
 		# Sample actions from multivariate normal distribution for 
 		# continuous params
 		cont_means = self.continuous_activation(cont_action_logits)
-		dist = MultivariateNormal(cont_means, cov_mat)
-		cont_log_probs = dist.log_prob(batch_acts['cont_actions'])
+		dist = MultivariateNormal(cont_means, cov_mat.to(device))
+		cont_log_probs = dist.log_prob(batch_acts['cont_actions'].to(device))
 
 		# for discrete
-		disc_log_probs = torch.zeros(disc_action_logits.shape[0])
+		disc_log_probs = torch.zeros(disc_action_logits.shape[0], device=device)
 
 		for dexed_idx, log_idx in self.disc_params_dict.items():
 			logits = disc_action_logits[:, log_idx]
 			dist = Categorical(logits=logits)
-			disc_log_probs += dist.log_prob(batch_acts['disc_actions'][:, log_idx].argmax(1))
+			disc_log_probs += dist.log_prob(batch_acts['disc_actions'][:, log_idx].argmax(1).to(device))
 
 		# Return the value vector V of each observation in the batch
 		# and log probabilities log_probs of each action in the batch
@@ -676,6 +691,9 @@ if __name__ == '__main__':
 	torch.random.manual_seed(seed)
 	np.random.seed(seed)
 	random.seed(seed)
+	
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device: {device}")
 	# hyperparameters
 	steps_per_episode = 5 # 25
 	rollout_batch_size = 1 # 32
@@ -720,7 +738,7 @@ if __name__ == '__main__':
 	actor_comp_net = ComparerNetwork(
 		feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
 		comparer_net=CNNComparer(n_feat_channels=32*2)
-	)
+	).to(device)
 	actor = ActorModel(
 		sound_comparer=actor_comp_net,
 		intermediate_layers=IntermediateLayers(
@@ -733,15 +751,15 @@ if __name__ == '__main__':
 		discrete_head=BasicActorHead(400, 
 			sum([len(*p.values()) for p in mapping_dict['Categorical']])
 		)
-	)
+	).to(device)
 	critic_comp_net = ComparerNetwork(
 		feature_extractor=CNNFeatExtractor(n_feat_channels=spectrogram_shape[0]),
 		comparer_net=CNNComparer(n_feat_channels=32*2)
-	)
+	).to(device)
 	critic = ValueModel(
 		sound_comparer=critic_comp_net,
 		decision_head=BasicActorHead(416 + num_synth_params + 1, 1)
-	)
+	).to(device)
 
 	# test_state_batch = {
 	# 	'target_spectrogram': torch.rand((rollout_batch_size, *spectrogram_shape)),
@@ -777,11 +795,11 @@ if __name__ == '__main__':
 
 	_, _, _, _vae_model = vae_model.build.build_extended_ae_model(conf_model, conf_train,
 																		idx_helper)
-	_vae_model = _vae_model.eval()
+	_vae_model = _vae_model.eval().to(device)
 
 	# Load from checkpoint
 	checkpoint_state_dict = torch.load(
-		os.path.join(config_dir, '00133.tar'), 
+		os.path.join(config_dir, '00159.tar'), 
 		map_location=torch.device('cpu')
 	)
 
@@ -797,11 +815,11 @@ if __name__ == '__main__':
 			ref_midi_pitch = 60
 			ref_midi_velocity = 100
 
-			sample_info = torch.tensor([preset_UID, ref_midi_pitch, ref_midi_velocity], dtype=torch.int32).unsqueeze(0)
+			sample_info = torch.tensor([preset_UID, ref_midi_pitch, ref_midi_velocity], dtype=torch.int32).unsqueeze(0).to(device)
 			ae_out = ae_model(input_spectrograms, sample_info)  # Spectral VAE - tuple output
 
 			_, _, z_K_sampled, _, _ = ae_out
-			v_out = reg_model(z_K_sampled)
+			v_out = reg_model(z_K_sampled).detach().cpu()
 
 			out_presets_instance = DexedPresetsParams(learnable_presets=v_out, dataset=dataset)
 			synth_params_tensor = out_presets_instance.get_full()
@@ -821,8 +839,8 @@ if __name__ == '__main__':
 		except StopIteration:
 			target_iterator = iter(target_sound_loader)
 			data = next(target_iterator)
-		target_spectrograms = data['spectrogram']
-		target_params = data['params']
+		target_spectrograms = data['spectrogram'].to(device)
+		target_params = data['params'].to(device)
 	# print("Target params: ", target_params.shape)
 	# 1/0
 
@@ -830,17 +848,16 @@ if __name__ == '__main__':
 	# init_params = torch.rand((rollout_batch_size, n_params))
 	# init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
 	
-	processed_target_spectrograms = torch.cat([target_spectrograms.unsqueeze(1), torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
+	processed_target_spectrograms = torch.cat([target_spectrograms.unsqueeze(1), torch.zeros(target_spectrograms.size(0), 1, 257, 2, device=device)], axis=-1)
 	# print("processed_initial_ground_truth_spectrograms: ", processed_target_spectrograms.shape)
 	# 1/0
 	
-	init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
+	init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms).to(device)
 	# print("init_param_vectors: ", init_param_vectors.shape)
 	# 1/0
-
 	with torch.no_grad():
 		vae_params_mse = ((target_params - init_param_vectors)**2).mean(-1).mean().item()
-
+	init_param_vectors = init_param_vectors.detach().cpu()
 	init_spectrograms = []
 	
 	if not use_multiprocessing_for_spectrogram_metrics:
@@ -859,13 +876,13 @@ if __name__ == '__main__':
 			init_param_vec = init_param_vec.numpy()
 			jobs.append(dask.delayed(_job)(init_param_vec))
 		init_spectrograms = dask.compute(*jobs, scheduler="processes")
-	
-	init_spectrograms = torch.stack(init_spectrograms)
+	init_param_vectors = init_param_vectors.to(device)
+	init_spectrograms = torch.stack(init_spectrograms).to(device)
 	# print("init_spectrograms: ", init_spectrograms.shape)
 	# 1/0
 
 	# Add number of steps remaining to the initial state
-	init_steps_remaining = torch.ones((rollout_batch_size, 1)) * steps_per_episode
+	init_steps_remaining = torch.ones((rollout_batch_size, 1), device=device) * steps_per_episode
 	# print(target_spectrograms.shape)
 	# print(init_spectrograms.shape)
 	# print(init_param_vectors.shape)
@@ -885,12 +902,12 @@ if __name__ == '__main__':
 		return float(audiohandler.getMAE(target_spectrogram,predicted_spectrogram)), float(audiohandler.getSpectralConvergence(target_spectrogram,predicted_spectrogram)) 
 
 	
-	vae_mae_log, vae_sc = _compute_mae_log_and_sc(target_spectrograms.squeeze(), init_spectrograms.squeeze())
+	vae_mae_log, vae_sc = _compute_mae_log_and_sc(target_spectrograms.detach().cpu().squeeze(), init_spectrograms.detach().cpu().squeeze())
 
 	audiohandler = AudioHandler()
-	audiohandler.saveAudio(init_param_vectors.squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "vae_audio"),spec=True,fig_title="VAE Spectrogram")
-	audiohandler.saveAudio(target_params.squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "target_audio"),spec=True,fig_title="Target Spectrogram")
-
+	audiohandler.saveAudio(init_param_vectors.detach().cpu().squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "vae_audio"),spec=True,fig_title="VAE Spectrogram")
+	audiohandler.saveAudio(target_params.detach().cpu().squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "target_audio"),spec=True,fig_title="Target Spectrogram")
+	print("Started training")
 	for i in tqdm(range(num_train_iter)):
 		# Rollout from rollout_batch_size starts
 		# if not overfit:
@@ -902,64 +919,7 @@ if __name__ == '__main__':
 		writer.add_scalar("train/vae_synth_params_mse", vae_params_mse, iter_index)
 		writer.add_scalar("train/vae_mae_log", vae_mae_log, iter_index)
 		writer.add_scalar("train/vae_sc", vae_sc, iter_index)
-		# target_spectrograms = data['spectrogram']
-		# target_params = data['params']
-		# # print("Target params: ", target_params.shape)
-		# # 1/0
 
-		# # Get initial guesses to complete starting state
-		# # init_params = torch.rand((rollout_batch_size, n_params))
-		# # init_spectrograms = torch.rand((rollout_batch_size, *spectrogram_shape))
-		
-		# processed_target_spectrograms = torch.cat([target_spectrograms.unsqueeze(1), torch.zeros(target_spectrograms.size(0), 1, 257, 2)], axis=-1)
-		# # print("processed_initial_ground_truth_spectrograms: ", processed_target_spectrograms.shape)
-		# # 1/0
-		
-		# init_param_vectors = get_full_synth_params_from_vae(processed_target_spectrograms)
-		# # print("init_param_vectors: ", init_param_vectors.shape)
-		# # 1/0
-  
-		# with torch.no_grad():
-		# 	vae_params_mse = ((target_params - init_param_vectors)**2).mean(-1).mean().item()
-		# writer.add_scalar("train/vae_synth_params_mse", vae_params_mse, iter_index)
-		# init_spectrograms = []
-		
-		# if not use_multiprocessing_for_spectrogram_metrics:
-		# 	for init_param_vec in init_param_vectors:
-		# 		init_param_vec = init_param_vec.numpy()
-		# 		init_spectrograms.append(_audiohandler.generateSpectrogram(init_param_vec))
-		# else:
-		# 	# Use multiprocessing to compute the initial spectrograms in parallel
-		# 	def _job(params_vec):
-		# 		ah = AudioHandler()
-		# 		return ah.generateSpectrogram(params_vec)
-			
-		# 	jobs = []
-			
-		# 	for init_param_vec in init_param_vectors:
-		# 		init_param_vec = init_param_vec.numpy()
-		# 		jobs.append(dask.delayed(_job)(init_param_vec))
-		# 	init_spectrograms = dask.compute(*jobs, scheduler="processes")
-		
-		# init_spectrograms = torch.stack(init_spectrograms)
-		# # print("init_spectrograms: ", init_spectrograms.shape)
-		# # 1/0
-
-		# # Add number of steps remaining to the initial state
-		# init_steps_remaining = torch.ones((rollout_batch_size, 1)) * steps_per_episode
-		# # print(target_spectrograms.shape)
-		# # print(init_spectrograms.shape)
-		# # print(init_param_vectors.shape)
-		# # print(init_steps_remaining.shape)
-		# # 1/0
-		# base_multiplier = 16
-		# rollout_init_states = {
-		# 	'target_spectrogram': target_spectrograms.repeat(base_multiplier,1,1),
-		# 	'current_spectrogram': init_spectrograms.repeat(base_multiplier,1,1),
-		# 	'current_params': init_param_vectors.repeat(base_multiplier,1),
-		# 	'steps_remaining': init_steps_remaining.repeat(base_multiplier,1)
-		# }
-		
 		# Do rollouts
 		"""
 		Expected shapes of below variables:
@@ -970,8 +930,9 @@ if __name__ == '__main__':
 		batch_log_probs:		(rollout_batch_size * num_steps_per_episode, 1)
 		batch_rtgs:				(rollout_batch_size * num_steps_per_episode, 1)
 		"""
+		# print(f"Rollout {i}")
 		batch_obs, last_timestep_predicted_synth_params, (batch_continuous_acts, batch_discrete_acts), (batch_continuous_log_probs, batch_discrete_log_probs), batch_rtgs, batch_rews_unrolled, batch_obs_unrolled_target_spectrogram, batch_obs_unrolled_current_spectrogram = ppo_model.rollout(rollout_init_states, n_steps=steps_per_episode)
-		
+		# print(f"After rollout")
 		# Log
 		# batch_rews_unrolled: (rollout_batch_size, num_steps_per_episode)
 		writer.add_scalar('train/avg_discounted_reward', batch_rews_unrolled[:,0].mean().item(), iter_index)
@@ -986,12 +947,12 @@ if __name__ == '__main__':
 		# def _compute_mae_log_and_sc(target_spectrogram, predicted_spectrogram):
 		# 	audiohandler = AudioHandler()
 		# 	return float(audiohandler.getMAE(target_spectrogram,predicted_spectrogram)), float(audiohandler.getSpectralConvergence(target_spectrogram,predicted_spectrogram)) 
-  
+		# print(f"before MP {i}")
 		# Use multiprocessing
 		if use_multiprocessing_for_spectrogram_metrics:
 			spec_metric_jobs = []
 			for _target_spectrogram, _predicted_spectrogram in zip(batch_target_specs, batch_last_predicted_specs):
-				spec_metric_jobs.append(dask.delayed(_compute_mae_log_and_sc)(_target_spectrogram, _predicted_spectrogram))
+				spec_metric_jobs.append(dask.delayed(_compute_mae_log_and_sc)(_target_spectrogram.detach().cpu(), _predicted_spectrogram.detach().cpu()))
 			spec_metric_jobs = dask.compute(*spec_metric_jobs, scheduler="processes")
 			
 			for _mae_log, _sc in spec_metric_jobs:
@@ -999,10 +960,10 @@ if __name__ == '__main__':
 				sc_vals.append(_sc)
 		else:
 			for _target_spectrogram, _predicted_spectrogram in zip(batch_target_specs, batch_last_predicted_specs):
-				_mae_log, _sc = _compute_mae_log_and_sc(_target_spectrogram, _predicted_spectrogram)
+				_mae_log, _sc = _compute_mae_log_and_sc(_target_spectrogram.detach().cpu(), _predicted_spectrogram.detach().cpu())
 				mae_log_vals.append(_mae_log)
 				sc_vals.append(_sc)
-
+		# print(f"after MP {i}")
 		avg_mae_log = sum(mae_log_vals)/len(mae_log_vals)
 		avg_sc = sum(sc_vals)/len(sc_vals)
 		
@@ -1023,7 +984,7 @@ if __name__ == '__main__':
 		# Compute advantages and normalize
 		V, _ = ppo_model.evaluate(batch_obs, {"cont_actions" : batch_continuous_acts, "disc_actions" : batch_discrete_acts})
 
-		A_k = batch_rtgs - V.detach()
+		A_k = batch_rtgs.to(device) - V.detach().to(device)
 
 		A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
@@ -1043,8 +1004,8 @@ if __name__ == '__main__':
 			# here's a great explanation: 
 			# https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
 			# TL;DR makes gradient ascent easier behind the scenes.
-			ratios_cont = torch.exp(curr_log_probs['cont_log_probs'] - batch_continuous_log_probs)
-			ratios_disc = torch.exp(curr_log_probs['disc_log_probs'] - batch_discrete_log_probs)
+			ratios_cont = torch.exp(curr_log_probs['cont_log_probs'].to(device) - batch_continuous_log_probs.to(device))
+			ratios_disc = torch.exp(curr_log_probs['disc_log_probs'].to(device) - batch_discrete_log_probs.to(device))
 			# Calculate surrogate losses.
 			surr1_cont = ratios_cont * A_k
 			surr2_cont = torch.clamp(ratios_cont, 1 - ppo_model.clip, 1 + ppo_model.clip) * A_k
@@ -1056,7 +1017,7 @@ if __name__ == '__main__':
 			# performance function maximizes it.
 			# actor_loss = (-torch.min(surr1, surr2)).mean()
 			actor_loss = (-torch.min(surr1_cont, surr2_cont)).mean() + (-torch.min(surr1_disc, surr2_disc)).mean()
-			critic_loss = nn.MSELoss()(V, batch_rtgs)
+			critic_loss = nn.MSELoss()(V.to(device), batch_rtgs.to(device))
 
 			# print(f"Actor loss: {actor_loss.item()}, Critic loss: {critic_loss.item()}")
 			writer.add_scalar('train/actor_loss', actor_loss.item(), iter_index)
@@ -1065,6 +1026,10 @@ if __name__ == '__main__':
 			# Calculate gradients and perform backward propagation for actor network
 			ppo_model.actor_optim.zero_grad()
 			actor_loss.backward(retain_graph=True)
+			# for p in ppo_model.actor.parameters():
+			# 	if p.device is not device:
+			# 		print(p)
+			# 		print(p.shape)
 			ppo_model.actor_optim.step()
 
 			# Calculate gradients and perform backward propagation for critic network
@@ -1084,5 +1049,5 @@ if __name__ == '__main__':
 				},
 				os.path.join(checkpoints_dir, f"model_training_iteration_{i}.pt")
 			)
-			audiohandler.saveAudio(predicted_params[0,:].squeeze().numpy().astype(float),
-                          os.path.join(checkpoints_dir, f"pred_audio_iter_{i}"),spec=True,fig_title=f"Predicted Parameter Spectrogram at epoch {i}")
+			# audiohandler.saveAudio(predicted_params[0,:].squeeze().numpy().astype(float),
+			#               os.path.join(checkpoints_dir, f"pred_audio_iter_{i}"),spec=True,fig_title=f"Predicted Parameter Spectrogram at epoch {i}")
