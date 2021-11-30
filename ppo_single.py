@@ -775,7 +775,7 @@ if __name__ == '__main__':
 	print(n_trainable_params(critic))
 	print(f"Dataset len: {len(dataset)}")
 	# Initialize the PPO object
-	ppo_model = PPO(actor, critic,clip=0.2,actor_lr=1e-3, critic_lr=5e-4, 
+	ppo_model = PPO(actor, critic,clip=0.2,actor_lr=1e-3, critic_lr=5e-5, 
 				 cov_matrix_val=0.5,gamma=0.9)
 
 	## VAE stuff
@@ -888,7 +888,7 @@ if __name__ == '__main__':
 	# print(init_param_vectors.shape)
 	# print(init_steps_remaining.shape)
 	# 1/0
-	base_multiplier = 8
+	base_multiplier = 2
 	rollout_init_states = {
 		'target_spectrogram': target_spectrograms.repeat(base_multiplier,1,1),
 		'current_spectrogram': init_spectrograms.repeat(base_multiplier,1,1),
@@ -908,6 +908,7 @@ if __name__ == '__main__':
 	audiohandler.saveAudio(init_param_vectors.detach().cpu().squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "vae_audio"),spec=True,fig_title="VAE Spectrogram")
 	audiohandler.saveAudio(target_params.detach().cpu().squeeze().numpy().astype(float),os.path.join(checkpoints_dir, "target_audio"),spec=True,fig_title="Target Spectrogram")
 	print("Started training")
+	lowest_MAE = 1000
 	for i in tqdm(range(num_train_iter)):
 		# Rollout from rollout_batch_size starts
 		# if not overfit:
@@ -1038,7 +1039,8 @@ if __name__ == '__main__':
 			ppo_model.critic_optim.step()
    
 			iter_index += 1
-		if i % checkpoint_every_n_iters == 0:
+		if i % checkpoint_every_n_iters == 0 or avg_mae_log < lowest_MAE:
+			lowest_MAE = avg_mae_log
 			torch.save(
 				{
 					'training_iteration': i,
@@ -1049,5 +1051,5 @@ if __name__ == '__main__':
 				},
 				os.path.join(checkpoints_dir, f"model_training_iteration_{i}.pt")
 			)
-			# audiohandler.saveAudio(predicted_params[0,:].squeeze().numpy().astype(float),
-			#               os.path.join(checkpoints_dir, f"pred_audio_iter_{i}"),spec=True,fig_title=f"Predicted Parameter Spectrogram at epoch {i}")
+			audiohandler.saveAudio(predicted_params[0,:].detach().cpu().squeeze().numpy().astype(float),
+			              os.path.join(checkpoints_dir, f"pred_audio_iter_{i}"),spec=True,fig_title=f"Predicted Parameter Spectrogram at epoch {i}")
